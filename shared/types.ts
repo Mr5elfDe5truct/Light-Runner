@@ -56,7 +56,37 @@ export interface Material {
   presets: MaterialPreset[];
 }
 
+export interface LibraryEntry {
+  id: string;
+  name: string;
+  updated: number;
+  thumbnail: string;
+  items: number;
+}
+
+export interface HistoryEntry {
+  id: string;
+  at: number;
+  names: string[];
+  jobs: number;
+  seconds: number; // how long it really took
+  result: 'finished' | 'stopped' | 'failed';
+}
+
 export interface LaserApi {
+  library: {
+    list(): Promise<LibraryEntry[]>;
+    save(name: string, design: unknown, thumbnail: string, id?: string): Promise<string>;
+    load(id: string): Promise<unknown>;
+    remove(id: string): Promise<void>;
+    rename(id: string, name: string): Promise<void>;
+  };
+  history: {
+    list(): Promise<HistoryEntry[]>;
+    add(entry: Omit<HistoryEntry, 'id'>, design: unknown): Promise<void>;
+    design(id: string): Promise<unknown>;
+    clear(): Promise<void>;
+  };
   materials(): Promise<Material[]>;
   /** The design in progress, kept between runs. */
   saveDraft(json: string): Promise<void>;

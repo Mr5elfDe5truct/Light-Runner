@@ -12,9 +12,15 @@ import type { Item } from './model.ts';
 import { GRID_DEFAULTS, gridLayout, type GridSpec } from './testGrid.ts';
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  // Esc closes the dialog wherever the focus is.
+  useEffect(() => {
+    const fn = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [onClose]);
   return (
     <div className="modal" onPointerDown={onClose}>
-      <div className="dialog" onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === 'Escape' && onClose()}>
+      <div className="dialog" role="dialog" aria-label={title} onPointerDown={(e) => e.stopPropagation()}>
         <h2>{title}</h2>
         {children}
       </div>

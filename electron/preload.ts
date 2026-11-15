@@ -21,6 +21,19 @@ const api: LaserApi = {
   appInfo: call('app:info') as LaserApi['appInfo'],
   checkUpdate: call('app:check-update') as LaserApi['checkUpdate'],
   openUrl: call('app:open-url') as LaserApi['openUrl'],
+  library: {
+    list: call('library:list') as LaserApi['library']['list'],
+    save: call('library:save') as LaserApi['library']['save'],
+    load: call('library:load') as LaserApi['library']['load'],
+    remove: call('library:remove') as LaserApi['library']['remove'],
+    rename: call('library:rename') as LaserApi['library']['rename'],
+  },
+  history: {
+    list: call('history:list') as LaserApi['history']['list'],
+    add: call('history:add') as LaserApi['history']['add'],
+    design: call('history:design') as LaserApi['history']['design'],
+    clear: call('history:clear') as LaserApi['history']['clear'],
+  },
   onEvent(listener) {
     const fn = (_e: unknown, event: LaserEvent) => listener(event);
     ipcRenderer.on('laser:event', fn);

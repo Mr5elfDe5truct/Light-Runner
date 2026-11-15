@@ -5,6 +5,7 @@ import type { DeviceSettings } from '../shared/lp2.ts';
 import type { JobSpec, LaserEvent, PreviewSpec } from '../shared/types.ts';
 import { Laser } from './device.ts';
 import { loadMaterials } from './materials.ts';
+import { Store } from './store.ts';
 
 const laser = new Laser();
 let win: BrowserWindow | null = null;
@@ -68,6 +69,20 @@ handle('app:open-url', (url: string) => {
   if (!/^https:\/\/github\.com\//.test(url)) throw new Error('Only GitHub links can be opened from here.');
   return shell.openExternal(url);
 });
+
+// ---------------------------------------------------------------- library and history
+
+let store: Store | null = null;
+const st = () => (store ??= new Store(app.getPath('userData')));
+handle('library:list', () => st().listLibrary());
+handle('library:save', (name: string, design: unknown, thumb: string, id?: string) => st().saveToLibrary(name, design, thumb, id));
+handle('library:load', (id: string) => st().loadFromLibrary(id));
+handle('library:remove', (id: string) => st().deleteFromLibrary(id));
+handle('library:rename', (id: string, name: string) => st().renameInLibrary(id, name));
+handle('history:list', () => st().listHistory());
+handle('history:add', (entry: Omit<import('../shared/types.ts').HistoryEntry, 'id'>, design: unknown) => st().addHistory(entry, design));
+handle('history:design', (id: string) => st().historyDesign(id));
+handle('history:clear', () => st().clearHistory());
 
 const draftFile = () => path.join(app.getPath('userData'), 'draft.lightrunner.json');
 handle('app:save-draft', (json: string) => writeFile(draftFile(), json));

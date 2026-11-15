@@ -21,6 +21,8 @@ import { combineItems, offsetItem } from './vectorOps.ts';
 import { readSvg, textImage } from './vector.ts';
 import { Workspace } from './Workspace.tsx';
 import { CameraDialog } from './CameraDialog.tsx';
+import { HelpDialog, HistoryDialog, LibraryDialog, WelcomeDialog } from './panels.tsx';
+import { thumbnail } from './thumbnail.ts';
 
 const laser = window.laser;
 const MY_MATERIALS_KEY = 'lightrunner.materials';
@@ -34,7 +36,9 @@ interface RunState {
   size?: number;
 }
 type LogLine = { level: string; message: string; at: string };
-type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera';
+type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome';
+const WELCOME_KEY = 'lightrunner.welcomed';
+const THEME_KEY = 'lightrunner.theme';
 
 function presetMode(item: Item): 'line' | 'fill' | 'image' {
   if (item.kind === 'vector') return item.mode === 'line' ? 'line' : 'fill';
@@ -87,6 +91,18 @@ export function App() {
   const [batchPerPart, setBatchPerPart] = useState(0);
   const batchStop = useRef(false);
   const [cameraBg, setCameraBg] = useState<{ url: string; opacity: number; show: boolean } | null>(null);
+  const [libraryId, setLibraryId] = useState<string | null>(null);
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'));
+  const materialsInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (!localStorage.getItem(WELCOME_KEY)) setDialog('welcome');
+  }, []);
   const [settings, setSettings] = useState<DeviceSettings>({ beep: false, reverseDirection: false });
   const [busy, setBusy] = useState(false);
   const [runStarted, setRunStarted] = useState<number | null>(null);
@@ -475,6 +491,7 @@ export function App() {
     if (items.length && !window.confirm('Start a new design? You can undo this.')) return;
     history.commit([]);
     setSelection([]);
+    setLibraryId(null);
   };
 
   // ---------------------------------------------------------------- laser actions
@@ -521,11 +538,21 @@ export function App() {
       note(`Sending ${jobs.length} job${jobs.length === 1 ? '' : 's'}.`);
       const started = Date.now();
       setRunStarted(started);
+      let result: 'finished' | 'stopped' | 'failed' = 'finished';
       try {
+        batchStop.current = false;
         await laser.run(jobs);
+        if (batchStop.current) result = 'stopped';
         note(`Done in ${formatDuration((Date.now() - started) / 1000)}.`);
+      } catch (e) {
+        result = 'failed';
+        throw e;
       } finally {
         setRunStarted(null);
+        const snapshot = confirm?.items ?? visible;
+        laser.history
+          .add({ at: started, names: snapshot.map((i) => i.name), jobs: jobs.length, seconds: (Date.now() - started) / 1000, result }, { app: 'Light Runner', version: 3, items: snapshot })
+          .catch(() => undefined);
       }
     });
 
@@ -666,7 +693,17 @@ export function App() {
         <button onClick={history.redo} disabled={!history.canRedo} title="Redo (Ctrl+Y)">
           ↷ Redo
         </button>
+        <button onClick={() => setDialog('library')} title="Your saved designs, and sharing materials">
+          My designs
+        </button>
+        <button onClick={() => setDialog('history')} title="Jobs you've engraved; run one again">
+          History
+        </button>
         <button onClick={() => setDialog('settings')}>Device settings</button>
+        <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'} aria-label="Switch theme">
+          {theme === 'dark' ? 'Light' : 'Dark'}
+        </button>
+        <button onClick={() => setDialog('help')}>Help</button>
         <button onClick={() => setDialog('about')} title="Version and updates">
           About
         </button>
@@ -750,7 +787,14 @@ export function App() {
           </h3>
           <ul className="layers">
             {items.map((i) => (
-              <li key={i.id} className={selected.has(i.id) ? 'on' : ''} onClick={(e) => select([i.id], e.ctrlKey || e.shiftKey || e.metaKey)} title="Ctrl- or Shift-click to select several">
+              <li
+                key={i.id}
+                tabIndex={0}
+                className={selected.has(i.id) ? 'on' : ''}
+                onClick={(e) => select([i.id], e.ctrlKey || e.shiftKey || e.metaKey)}
+                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), select([i.id], e.ctrlKey || e.shiftKey))}
+                title="Ctrl- or Shift-click to select several"
+              >
                 <input type="checkbox" checked={i.visible} title="Engrave this" onChange={(e) => update(i.id, { visible: e.target.checked })} onClick={(e) => e.stopPropagation()} />
                 <span>{i.name}</span>
                 <small>{MODE_LABEL[i.mode]}</small>
@@ -908,6 +952,86 @@ export function App() {
           }}
         />
       )}
+      {dialog === 'library' && (
+        <LibraryDialog
+          currentId={libraryId}
+          onClose={() => setDialog(null)}
+          onSave={async (name, id) => {
+            const thumb = await thumbnail(items, previews);
+            const saved = await laser.library.save(name, { app: 'Light Runner', version: 3, items }, thumb, id);
+            setLibraryId(saved);
+            note(`Saved "${name}" to My designs.`);
+          }}
+          onOpen={async (id, name) => {
+            try {
+              const design = (await laser.library.load(id)) as { items: Item[] };
+              history.commit(design.items.map(normalizeItem));
+              setSelection([]);
+              setLibraryId(id);
+              setDialog(null);
+              note(`Opened "${name}".`);
+            } catch (e) {
+              fail(e);
+            }
+          }}
+          onExportMaterials={() => download('my-materials.lightrunner-materials.json', JSON.stringify({ app: 'Light Runner materials', version: 1, materials: myMaterials }, null, 1), 'application/json')}
+          onImportMaterials={() => materialsInput.current?.click()}
+        />
+      )}
+      {dialog === 'history' && (
+        <HistoryDialog
+          onClose={() => setDialog(null)}
+          onLoad={async (id, rerun) => {
+            try {
+              const design = (await laser.history.design(id)) as { items: Item[] };
+              const loaded = design.items.map(normalizeItem);
+              history.commit(loaded);
+              setSelection([]);
+              setDialog(null);
+              if (rerun) {
+                if (!device) throw new Error('Connect the laser to run it again.');
+                const jobs = await buildJobs(loaded.filter((i) => i.visible));
+                const seconds = jobs.reduce((s, j) => s + estimateSeconds(j), 0);
+                setConfirm({ items: loaded.filter((i) => i.visible), jobs, seconds, warnings: jobWarnings(loaded, seconds) });
+              }
+            } catch (e) {
+              fail(e);
+            }
+          }}
+        />
+      )}
+      {dialog === 'help' && <HelpDialog onClose={() => setDialog(null)} onWelcome={() => setDialog('welcome')} />}
+      {dialog === 'welcome' && (
+        <WelcomeDialog
+          onClose={(dontShow) => {
+            if (dontShow) localStorage.setItem(WELCOME_KEY, '1');
+            setDialog(null);
+          }}
+        />
+      )}
+      <input
+        ref={materialsInput}
+        type="file"
+        accept=".json"
+        hidden
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (!file) return;
+          try {
+            const data = JSON.parse(await file.text());
+            if (data.app !== 'Light Runner materials' || !Array.isArray(data.materials)) throw new Error('That is not a Light Runner materials file.');
+            const known = new Set(myMaterials.map((m) => m.name.toLowerCase()));
+            const added = (data.materials as Material[]).filter((m) => m && m.name && Array.isArray(m.presets) && !known.has(m.name.toLowerCase())).map((m) => ({ ...m, id: `my-${newId()}` }));
+            const next = [...myMaterials, ...added];
+            setMyMaterials(next);
+            localStorage.setItem(MY_MATERIALS_KEY, JSON.stringify(next));
+            note(added.length ? `Added ${added.length} material${added.length === 1 ? '' : 's'}.` : 'Those materials are already here.');
+          } catch (err) {
+            fail(err);
+          }
+        }}
+      />
       {dialog === 'about' && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog === 'code' && <CodeDialog onCancel={() => setDialog(null)} onAdd={addCode} />}
       {dialog === 'grid' && <TestGridDialog onCancel={() => setDialog(null)} onCreate={addTestGrid} />}
