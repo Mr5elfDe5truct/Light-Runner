@@ -1,12 +1,23 @@
 # Light Runner
 
 A Windows desktop app by RG Studios for designing and engraving on the **LaserPecker LP2** over USB,
-without LaserPecker Design Space.
+without LaserPecker Design Space. It also drives **G-code (GRBL) diode lasers**, so one app runs both.
 
 ## What it does
 
 **Laser**
 - Connects to the LP2 over USB (CH340) and shows its firmware, status and live progress.
+- Also drives **GRBL lasers**:
+  - "Find out" detects which kind is on the port.
+  - The bed size comes from the machine.
+  - **Speed** in mm/min replaces Depth.
+  - Jobs stream as G-code.
+  - Preview traces the frame with the laser off.
+- **Recovery**: if the cable drops it reconnects by itself and keeps following the job; it also picks
+  up a job already running on the LP2 when you connect.
+- **Safety checks** before firing:
+  - It flags very hard burns, many passes, long jobs and codes too small to scan.
+  - When those apply, you confirm you'll stay with the laser.
 - **Preview** traces the frame of the selection, or of everything, with adjustable brightness.
   **Centre** shows just the centre point.
 - **Engrave**, **Pause**, **Resume** and **Stop**, with a confirmation before the laser fires.
@@ -54,6 +65,27 @@ without LaserPecker Design Space.
 - **Test grid** makes a power × depth grid of squares with labels, to find the right settings for a
   new material.
 
+**Placing and producing**
+- **Camera placement**:
+  - Use a webcam or a photo, and the laser traces the field.
+  - Click its four corners, and the straightened photo sits under your design.
+- **Batch runs**: the same design on many parts, with `{n}` serial numbers or `{line}` names from a
+  list, pausing for each part.
+- **Self-test**: one of each kind of job, for checking on scrap.
+
+**Images and shapes**
+- Six dither styles: Floyd–Steinberg, Atkinson, Jarvis, Stucki, Burkes and halftone.
+- Midtones (gamma), sharpen, and removing a plain background.
+- **Offset** outlines inside or outside a shape.
+- **Combine** shapes: union, cut out, overlap and exclude.
+- Single-line text **around a circle**.
+
+**Library and help**
+- **My designs**: saved designs with thumbnails. **Job history**: the last 50 jobs, with Run again.
+- Export and import your own materials to share or back up.
+- A first-run guide, Help with troubleshooting, a light theme, and full keyboard use.
+- About shows the version and checks GitHub for newer releases.
+
 **Other**
 - **Export G-code** for an outline.
 
@@ -68,7 +100,7 @@ without LaserPecker Design Space.
 | Delete | Delete the selection |
 | Arrow keys | Move 1 mm (Shift: 5 mm, Alt: 0.1 mm) |
 | Ctrl+I / Ctrl+O / Ctrl+S | Import / open / save |
-| Esc | Deselect |
+| Esc | Deselect, or close a dialog |
 
 ## Build and run
 
@@ -85,7 +117,9 @@ Close LaserPecker Design Space before connecting. Only one program can use the L
 ## How it works
 
 - `shared/lp2.ts`: the LP2 protocol (frames, commands, file formats). See [docs/PROTOCOL.md](docs/PROTOCOL.md).
-- `electron/device.ts`: the serial connection and job sequence (upload, engrave, status polling).
+- `shared/grbl.ts`: G-code generation and streaming for GRBL lasers.
+- `electron/device.ts`, `electron/grblDevice.ts`, `electron/machines.ts`: the two drivers, and picking between them.
+- `electron/store.ts`: My designs and the job history.
 - `src/`: the React interface, image processing (`imaging.ts`) and SVG import (`vector.ts`).
 - `test/fixtures/lds-captures.json`: jobs and commands captured from LDS. The tests rebuild every one byte for byte.
 
