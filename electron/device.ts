@@ -80,7 +80,7 @@ export class Laser extends EventEmitter {
       const firmware = lp2.parseFirmware(await this.ask(lp2.query(lp2.QUERY.firmware), (p) => p[0] === 0x00 && p.length < 12));
       const idReply = await this.ask(lp2.query(lp2.QUERY.deviceId), (p) => p[0] === 0x00 && p.length < 12).catch(() => null);
       const files = lp2.parseFileList(await this.ask(lp2.query(lp2.QUERY.files), (p) => p[0] === 0x00 && p.length > 100, 3000));
-      this.info = { path, firmware, deviceId: idReply ? lp2.hex(idReply.slice(4, 7), '').toUpperCase() : null, storedFiles: files.length };
+      this.info = { kind: 'lp2', bed: { w: 100, h: 100 }, path, firmware, deviceId: idReply ? lp2.hex(idReply.slice(4, 7), '').toUpperCase() : null, storedFiles: files.length };
     } catch (e) {
       const keep = this.wantConnected;
       this.wantConnected = false;

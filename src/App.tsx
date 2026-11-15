@@ -23,6 +23,9 @@ import { Workspace } from './Workspace.tsx';
 import { CameraDialog } from './CameraDialog.tsx';
 import { HelpDialog, HistoryDialog, LibraryDialog, WelcomeDialog } from './panels.tsx';
 import { thumbnail } from './thumbnail.ts';
+import { buildGrblJobs } from './grblJobs.ts';
+import { DEFAULT_PROFILE, estimateProgramSeconds, type MachineProfile } from '../shared/grbl.ts';
+import { FIELD } from './model.ts';
 
 const laser = window.laser;
 const MY_MATERIALS_KEY = 'lightrunner.materials';
@@ -38,6 +41,16 @@ interface RunState {
 type LogLine = { level: string; message: string; at: string };
 type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome';
 const WELCOME_KEY = 'lightrunner.welcomed';
+const MACHINE_KEY = 'lightrunner.machine';
+type Machine = { kind: 'lp2' | 'grbl'; bed: { w: number; h: number }; profile?: MachineProfile };
+const loadMachine = (): Machine => {
+  try {
+    return JSON.parse(localStorage.getItem(MACHINE_KEY) ?? '') as Machine;
+  } catch {
+    return { kind: 'lp2', bed: { w: 100, h: 100 } };
+  }
+};
+const jobSeconds = (jobs: JobSpec[]) => jobs.reduce((s, j) => s + (j.gcode ? estimateProgramSeconds(j.gcode) : estimateSeconds(j)), 0);
 const THEME_KEY = 'lightrunner.theme';
 
 function presetMode(item: Item): 'line' | 'fill' | 'image' {
@@ -71,6 +84,13 @@ export function App() {
   const items = history.present;
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [port, setPort] = useState('');
+  const [machine, setMachine] = useState<Machine>(loadMachine);
+  const [connectKind, setConnectKind] = useState<'auto' | 'lp2' | 'grbl'>('auto');
+  // The work field follows the machine (the last one connected, so designs fit while offline).
+  FIELD.w = machine.bed.w;
+  FIELD.h = machine.bed.h;
+  const isGrbl = machine.kind === 'grbl';
+  const buildFor = (list: Item[]) => (isGrbl ? buildGrblJobs(list, machine.profile ?? { ...DEFAULT_PROFILE, bedW: machine.bed.w, bedH: machine.bed.h }) : buildJobs(list));
   const [device, setDevice] = useState<DeviceInfo | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [run, setRun] = useState<RunState>({ phase: 'idle' });
@@ -148,7 +168,14 @@ export function App() {
       else if (e.type === 'log') note(e.message, e.level);
       else if (e.type === 'connection') {
         setReconnecting(!e.connected && !!e.reconnecting);
-        if (e.connected) setDevice(e.info ?? null);
+        if (e.connected) {
+          setDevice(e.info ?? null);
+          if (e.info) {
+            const m: Machine = { kind: e.info.kind, bed: e.info.bed, profile: e.info.profile };
+            setMachine(m);
+            localStorage.setItem(MACHINE_KEY, JSON.stringify(m));
+          }
+        }
         else if (!e.reconnecting) {
           setDevice(null);
           setStatus(null);
@@ -363,7 +390,7 @@ export function App() {
       w: c.size,
       h: c.size,
       power: c.power,
-      depth: c.depth,
+      ...(spec.speedMode ? { speed: c.depth, depth: DEFAULTS.depth } : { depth: c.depth }),
       passes: spec.passes,
     }));
     // Labels in the fast single-line font.
@@ -507,7 +534,7 @@ export function App() {
     }
   };
 
-  const connect = () => act(async () => (device ? laser.disconnect() : laser.connect(port)));
+  const connect = () => act(async () => (device ? laser.disconnect() : laser.connect(port, connectKind)));
 
   const previewTargets = selItems.filter((i) => i.visible).length ? selItems.filter((i) => i.visible) : visible;
   const startPreview = (center = false) =>
@@ -526,9 +553,9 @@ export function App() {
       if (!visible.length) throw new Error('Add something to engrave first.');
       const outside = visible.filter((i) => !insideField(i));
       if (outside.length) throw new Error(`${outside.map((i) => i.name).join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the 100 × 100 mm field.`);
-      const jobs = await buildJobs(visible);
-      const seconds = jobs.reduce((s, j) => s + estimateSeconds(j), 0);
-      setConfirm({ items: visible, jobs, seconds, warnings: jobWarnings(visible, seconds) });
+      const jobs = await buildFor(visible);
+      const seconds = jobSeconds(jobs);
+      setConfirm({ items: visible, jobs, seconds, warnings: jobWarnings(visible, seconds, machine.kind) });
     });
 
   const engrave = (jobs: JobSpec[]) =>
@@ -562,8 +589,8 @@ export function App() {
       if (!visible.length) throw new Error('Add something to engrave first.');
       const outside = visible.filter((i) => !insideField(i));
       if (outside.length) throw new Error(`${outside.map((i) => i.name).join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the field.`);
-      const jobs = await buildJobs(visible);
-      setBatchPerPart(jobs.reduce((s, j) => s + estimateSeconds(j), 0));
+      const jobs = await buildFor(visible);
+      setBatchPerPart(jobSeconds(jobs));
       setDialog('batch');
     });
 
@@ -577,7 +604,7 @@ export function App() {
       for (let i = 0; i < total && !batchStop.current; i++) {
         const values = batchValues(spec, i);
         const part = base.map((it) => (it.text && hasPlaceholders(it.text.template) ? rewordItem(it, fillTemplate(it.text.template, values)) : it));
-        const jobs = await buildJobs(part);
+        const jobs = await buildFor(part);
         note(`Batch part ${i + 1} of ${total}${spec.lines.length ? `: ${values.line}` : `: #${values.n}`}.`);
         await laser.run(jobs);
         if (batchStop.current) break;
@@ -679,13 +706,26 @@ export function App() {
             </option>
           ))}
         </select>
+        <select value={connectKind} onChange={(e) => setConnectKind(e.target.value as 'auto' | 'lp2' | 'grbl')} disabled={!!device} title="What kind of laser is on this port">
+          <option value="auto">Find out</option>
+          <option value="lp2">LaserPecker LP2</option>
+          <option value="grbl">G-code laser (GRBL)</option>
+        </select>
         <button onClick={() => refreshPorts().catch(fail)} disabled={!!device} title="Look for serial ports again">
           ↻
         </button>
         <button className={device ? '' : 'primary'} onClick={connect} disabled={busy || (!device && !port) || working}>
           {device ? 'Disconnect' : 'Connect'}
         </button>
-        <div className="device">{device ? `LP2${device.deviceId ? `-${device.deviceId}` : ''} · firmware ${device.firmware ?? '?'}` : ''}</div>
+        <div className="device">
+          {device
+            ? device.kind === 'grbl'
+              ? `${device.firmware ?? 'GRBL'} · ${device.bed.w} × ${device.bed.h} mm`
+              : `LP2${device.deviceId ? `-${device.deviceId}` : ''} · firmware ${device.firmware ?? '?'}`
+            : isGrbl
+              ? `Designing for the G-code laser (${machine.bed.w} × ${machine.bed.h} mm)`
+              : ''}
+        </div>
         <div className="spacer" />
         <button onClick={history.undo} disabled={!history.canUndo} title="Undo (Ctrl+Z)">
           ↶ Undo
@@ -699,7 +739,7 @@ export function App() {
         <button onClick={() => setDialog('history')} title="Jobs you've engraved; run one again">
           History
         </button>
-        <button onClick={() => setDialog('settings')}>Device settings</button>
+        {!isGrbl && <button onClick={() => setDialog('settings')}>Device settings</button>}
         <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'} aria-label="Switch theme">
           {theme === 'dark' ? 'Light' : 'Dark'}
         </button>
@@ -805,6 +845,7 @@ export function App() {
 
           {sel && (
             <Properties
+              machine={machine.kind}
               item={sel}
               materials={materials}
               lockAspect={lockAspect}
@@ -828,6 +869,7 @@ export function App() {
           )}
           {selItems.length > 1 && (
             <MultiProperties
+              machine={machine.kind}
               items={selItems}
               materials={materials}
               onChangeAll={(patch, key) => updateMany(selected, patch, key)}
@@ -874,7 +916,7 @@ export function App() {
             <button onClick={() => startPreview(false)} disabled={!device || busy || working || !previewTargets.length} title="Trace the frame of what will be engraved">
               Preview {selItems.some((i) => i.visible) ? 'selected' : 'all'}
             </button>
-            <button onClick={() => startPreview(true)} disabled={!device || busy || working || !previewTargets.length} title="Show just the centre point">
+            <button onClick={() => startPreview(true)} disabled={isGrbl || !device || busy || working || !previewTargets.length} title={isGrbl ? 'The LP2 can show a centre point; G-code lasers trace the frame' : 'Show just the centre point'}>
               Centre
             </button>
           </>
@@ -941,7 +983,7 @@ export function App() {
         <CameraDialog
           connected={!!device}
           previewing={run.phase === 'previewing'}
-          onTraceField={() => laser.preview({ x: 0, y: 0, width: 1000, height: 1000, brightness })}
+          onTraceField={() => laser.preview({ x: 0, y: 0, width: FIELD.w * 10, height: FIELD.h * 10, brightness })}
           onStopTrace={() => laser.stopPreview()}
           onCancel={() => setDialog(null)}
           onDone={(url) => {
@@ -990,9 +1032,9 @@ export function App() {
               setDialog(null);
               if (rerun) {
                 if (!device) throw new Error('Connect the laser to run it again.');
-                const jobs = await buildJobs(loaded.filter((i) => i.visible));
-                const seconds = jobs.reduce((s, j) => s + estimateSeconds(j), 0);
-                setConfirm({ items: loaded.filter((i) => i.visible), jobs, seconds, warnings: jobWarnings(loaded, seconds) });
+                const jobs = await buildFor(loaded.filter((i) => i.visible));
+                const seconds = jobSeconds(jobs);
+                setConfirm({ items: loaded.filter((i) => i.visible), jobs, seconds, warnings: jobWarnings(loaded, seconds, machine.kind) });
               }
             } catch (e) {
               fail(e);
@@ -1034,7 +1076,7 @@ export function App() {
       />
       {dialog === 'about' && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog === 'code' && <CodeDialog onCancel={() => setDialog(null)} onAdd={addCode} />}
-      {dialog === 'grid' && <TestGridDialog onCancel={() => setDialog(null)} onCreate={addTestGrid} />}
+      {dialog === 'grid' && <TestGridDialog speedMode={isGrbl} onCancel={() => setDialog(null)} onCreate={addTestGrid} />}
       {dialog === 'material' && sel && <SaveMaterialDialog suggested="" onCancel={() => setDialog(null)} onSave={saveMaterial} />}
       {pdf && (
         <PdfPageDialog

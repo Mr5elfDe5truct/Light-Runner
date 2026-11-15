@@ -1,6 +1,6 @@
 /** Builds text items from their recipe, and redraws them with new words (batches, serials). */
 import { hersheyArc, hersheyText } from './hershey.ts';
-import { DEFAULTS, fitToField, IMAGE_DEFAULTS, newId, type ImageItem, type Item, type TextSource, type VectorItem } from './model.ts';
+import { DEFAULTS, FIELD, fitToField, IMAGE_DEFAULTS, newId, type ImageItem, type Item, type TextSource, type VectorItem } from './model.ts';
 import { textImage } from './vector.ts';
 
 const labelOf = (text: string) => `Text: ${text.replace(/\s+/g, ' ').slice(0, 24)}`;
@@ -22,8 +22,8 @@ export function makeTextItem(src: TextSource, words: string): Item {
       naturalH: h.height,
       w: h.width,
       h: h.height,
-      x: (100 - h.width) / 2,
-      y: (100 - h.height) / 2,
+      x: (FIELD.w - h.width) / 2,
+      y: (FIELD.h - h.height) / 2,
       text: src,
     };
     return item;

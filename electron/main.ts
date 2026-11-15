@@ -3,11 +3,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DeviceSettings } from '../shared/lp2.ts';
 import type { JobSpec, LaserEvent, PreviewSpec } from '../shared/types.ts';
-import { Laser } from './device.ts';
+import { Machines } from './machines.ts';
 import { loadMaterials } from './materials.ts';
 import { Store } from './store.ts';
 
-const laser = new Laser();
+const laser = new Machines();
 let win: BrowserWindow | null = null;
 
 const settingsFile = () => path.join(app.getPath('userData'), 'device-settings.json');
@@ -37,7 +37,7 @@ const handle = <A extends unknown[], R>(channel: string, fn: (...args: A) => Pro
   ipcMain.handle(channel, (_e, ...args) => fn(...(args as A)));
 
 handle('laser:ports', () => laser.ports());
-handle('laser:connect', (p: string) => laser.connect(p));
+handle('laser:connect', (p: string, kind?: 'lp2' | 'grbl' | 'auto') => laser.connect(p, kind ?? 'auto'));
 handle('laser:disconnect', () => laser.disconnect());
 handle('laser:run', (jobs: JobSpec[]) => laser.run(jobs.map((j) => ({ ...j, file: new Uint8Array(j.file) }))));
 handle('laser:pause', () => laser.pause());

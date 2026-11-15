@@ -5,10 +5,9 @@
  */
 import { useRef, useState } from 'react';
 import { itemBounds, placedPaths } from './geometry.ts';
-import { FIELD_MM, type Item } from './model.ts';
+import { FIELD, type Item } from './model.ts';
 
-const PAD = 8;
-const FULL = FIELD_MM + PAD * 2;
+
 
 interface Props {
   items: Item[];
@@ -34,7 +33,18 @@ type Gesture =
 
 export function Workspace({ items, previews, selected, snap, onSelect, onMoveStart, onMove, background }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [view, setView] = useState({ zoom: 1, cx: FIELD_MM / 2, cy: FIELD_MM / 2 });
+  const FW = FIELD.w;
+  const FH = FIELD.h;
+  const PAD = Math.max(FW, FH) * 0.08;
+  const FULL = Math.max(FW, FH) + PAD * 2;
+  const [view, setView] = useState({ zoom: 1, cx: FW / 2, cy: FH / 2 });
+  // Re-centre when the machine (and so the field) changes.
+  const fieldKey = `${FW}x${FH}`;
+  const lastField = useRef(fieldKey);
+  if (lastField.current !== fieldKey) {
+    lastField.current = fieldKey;
+    setView({ zoom: 1, cx: FW / 2, cy: FH / 2 });
+  }
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const g = useRef<Gesture | null>(null);
   const set = (next: Gesture | null) => {
@@ -65,21 +75,32 @@ export function Workspace({ items, previews, selected, snap, onSelect, onMoveSta
   };
 
   const grid = [];
-  const step = view.zoom >= 4 ? 1 : view.zoom >= 2 ? 5 : 10;
-  for (let v = 0; v <= FIELD_MM; v += step) {
-    const major = v % 50 === 0;
-    const minor = v % 10 !== 0;
+  const big = Math.max(FW, FH) > 150; // a G-code laser's bed: coarser grid
+  const scale = Math.max(FW, FH) / 100;
+  const minorStep = big ? 10 : 1;
+  const step = view.zoom >= 4 ? minorStep : view.zoom >= 2 ? (big ? 25 : 5) : big ? 50 : 10;
+  const labelEvery = big ? 50 : 10;
+  const font = (2.2 * scale) / Math.sqrt(view.zoom);
+  for (let v = 0; v <= Math.max(FW, FH); v += step) {
+    const major = v % (big ? 100 : 50) === 0;
+    const minor = v % labelEvery !== 0;
     const cls = major ? 'grid major' : minor ? 'grid minor' : 'grid';
-    grid.push(<line key={`v${v}`} x1={v} y1={0} x2={v} y2={FIELD_MM} className={cls} />, <line key={`h${v}`} x1={0} y1={v} x2={FIELD_MM} y2={v} className={cls} />);
-    if (!minor || view.zoom >= 4)
-      grid.push(
-        <text key={`tx${v}`} x={v} y={-1.5} className="ruler" style={{ fontSize: 2.2 / Math.sqrt(view.zoom) }}>
-          {v}
-        </text>,
-        <text key={`ty${v}`} x={-1.5} y={v + 0.8} className="ruler" textAnchor="end" style={{ fontSize: 2.2 / Math.sqrt(view.zoom) }}>
-          {v}
-        </text>,
-      );
+    if (v <= FW) grid.push(<line key={`v${v}`} x1={v} y1={0} x2={v} y2={FH} className={cls} />);
+    if (v <= FH) grid.push(<line key={`h${v}`} x1={0} y1={v} x2={FW} y2={v} className={cls} />);
+    if (!minor || view.zoom >= 4) {
+      if (v <= FW)
+        grid.push(
+          <text key={`tx${v}`} x={v} y={-1.5 * scale} className="ruler" style={{ fontSize: font }}>
+            {v}
+          </text>,
+        );
+      if (v <= FH)
+        grid.push(
+          <text key={`ty${v}`} x={-1.5 * scale} y={v + 0.8 * scale} className="ruler" textAnchor="end" style={{ fontSize: font }}>
+            {v}
+          </text>,
+        );
+    }
   }
 
   const box = gesture?.kind === 'box' ? gesture : null;
@@ -147,8 +168,8 @@ export function Workspace({ items, previews, selected, snap, onSelect, onMoveSta
           set(null);
         }}
       >
-        <rect x={0} y={0} width={FIELD_MM} height={FIELD_MM} className="field" />
-        {background && <image href={background.url} x={0} y={0} width={FIELD_MM} height={FIELD_MM} opacity={background.opacity} preserveAspectRatio="none" />}
+        <rect x={0} y={0} width={FW} height={FH} className="field" />
+        {background && <image href={background.url} x={0} y={0} width={FW} height={FH} opacity={background.opacity} preserveAspectRatio="none" />}
         {grid}
         {items
           .filter((i) => i.visible)
@@ -201,7 +222,7 @@ export function Workspace({ items, previews, selected, snap, onSelect, onMoveSta
         <button onClick={() => zoomAt(1.25)} title="Zoom in">
           +
         </button>
-        <button onClick={() => setView({ zoom: 1, cx: FIELD_MM / 2, cy: FIELD_MM / 2 })} title="Show the whole field">
+        <button onClick={() => setView({ zoom: 1, cx: FW / 2, cy: FH / 2 })} title="Show the whole field">
           Fit
         </button>
       </div>

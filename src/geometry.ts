@@ -1,6 +1,6 @@
 /** Placing items on the field: rotation, flips, bounds. Pure functions. */
 import type { Point } from '../shared/lp2.ts';
-import { FIELD_MM, type Item, type VectorItem } from './model.ts';
+import { FIELD, type Item, type VectorItem } from './model.ts';
 
 export interface Box {
   x: number;
@@ -62,7 +62,7 @@ export function boundsOf(items: Item[]): Box | null {
 export function insideField(item: Item): boolean {
   const b = itemBounds(item);
   const e = 1e-6;
-  return b.x >= -e && b.y >= -e && b.x + b.w <= FIELD_MM + e && b.y + b.h <= FIELD_MM + e;
+  return b.x >= -e && b.y >= -e && b.x + b.w <= FIELD.w + e && b.y + b.h <= FIELD.h + e;
 }
 
 export type Align = 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom';
@@ -70,8 +70,8 @@ export type Align = 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom';
 /** Moves an item so its (rotated) bounds line up with the field. */
 export function alignToField(item: Item, how: Align): { x: number; y: number } {
   const b = itemBounds(item);
-  const dx = { left: -b.x, hcenter: (FIELD_MM - b.w) / 2 - b.x, right: FIELD_MM - b.w - b.x } as Record<string, number>;
-  const dy = { top: -b.y, vcenter: (FIELD_MM - b.h) / 2 - b.y, bottom: FIELD_MM - b.h - b.y } as Record<string, number>;
+  const dx = { left: -b.x, hcenter: (FIELD.w - b.w) / 2 - b.x, right: FIELD.w - b.w - b.x } as Record<string, number>;
+  const dy = { top: -b.y, vcenter: (FIELD.h - b.h) / 2 - b.y, bottom: FIELD.h - b.h - b.y } as Record<string, number>;
   return { x: item.x + (dx[how] ?? 0), y: item.y + (dy[how] ?? 0) };
 }
 
@@ -80,8 +80,8 @@ export function alignGroupToField(items: Item[], how: Align): Map<string, { x: n
   const b = boundsOf(items);
   const out = new Map<string, { x: number; y: number }>();
   if (!b) return out;
-  const dx = { left: -b.x, hcenter: (FIELD_MM - b.w) / 2 - b.x, right: FIELD_MM - b.w - b.x }[how as 'left'] ?? 0;
-  const dy = { top: -b.y, vcenter: (FIELD_MM - b.h) / 2 - b.y, bottom: FIELD_MM - b.h - b.y }[how as 'top'] ?? 0;
+  const dx = { left: -b.x, hcenter: (FIELD.w - b.w) / 2 - b.x, right: FIELD.w - b.w - b.x }[how as 'left'] ?? 0;
+  const dy = { top: -b.y, vcenter: (FIELD.h - b.h) / 2 - b.y, bottom: FIELD.h - b.h - b.y }[how as 'top'] ?? 0;
   for (const i of items) out.set(i.id, { x: i.x + dx, y: i.y + dy });
   return out;
 }

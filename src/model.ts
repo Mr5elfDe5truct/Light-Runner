@@ -1,8 +1,9 @@
 import type { Point, Resolution } from '../shared/lp2.ts';
 import type { DitherMethod } from './dither.ts';
 
-/** The LP2's work field, in millimetres. */
-export const FIELD_MM = 100;
+/** The work field of the connected machine, in millimetres (the LP2's is 100 x 100). */
+export const FIELD = { w: 100, h: 100 };
+export const FIELD_MM = 100; // the LP2's
 
 export type ImageMode = 'bw' | 'dither' | 'grey' | 'sketch';
 export type VectorMode = 'line' | 'fill';
@@ -23,6 +24,7 @@ interface Common {
   passes: number;
   resolution: Resolution; // for anything engraved as pixels
   material?: string;
+  speed?: number; // mm/min, for G-code lasers
   text?: TextSource; // set on text items, so batches can rewrite them
 }
 
@@ -79,5 +81,5 @@ export function fitToField(naturalW: number, naturalH: number, maxMm = 40) {
   const scale = Math.min(1, maxMm / Math.max(naturalW, naturalH));
   const w = naturalW * scale;
   const h = naturalH * scale;
-  return { w, h, x: (FIELD_MM - w) / 2, y: (FIELD_MM - h) / 2 };
+  return { w, h, x: (FIELD.w - w) / 2, y: (FIELD.h - h) / 2 };
 }

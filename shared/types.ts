@@ -6,7 +6,12 @@ export interface PortInfo {
   likelyLp2: boolean; // a CH340 serial chip, as in the LP2
 }
 
+export type MachineKind = 'lp2' | 'grbl';
+
 export interface DeviceInfo {
+  kind: MachineKind;
+  bed: { w: number; h: number }; // work area, mm
+  profile?: import('./grbl.ts').MachineProfile; // GRBL only
   path: string;
   firmware: string | null;
   deviceId: string | null;
@@ -16,7 +21,8 @@ export interface DeviceInfo {
 /** One file to upload and engrave. The file ID is read from the file's header. */
 export interface JobSpec {
   name: string;
-  file: Uint8Array;
+  file: Uint8Array; // LP2 job file (empty for GRBL)
+  gcode?: string; // GRBL program
   power: number;
   depth: number;
   passes: number;
@@ -95,7 +101,7 @@ export interface LaserApi {
   checkUpdate(): Promise<{ current: string; latest: string | null; url: string | null; newer: boolean; note?: string }>;
   openUrl(url: string): Promise<void>;
   ports(): Promise<PortInfo[]>;
-  connect(path: string): Promise<DeviceInfo>;
+  connect(path: string, kind?: MachineKind | 'auto'): Promise<DeviceInfo>;
   disconnect(): Promise<void>;
   run(jobs: JobSpec[]): Promise<void>;
   pause(): Promise<void>;

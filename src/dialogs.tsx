@@ -301,8 +301,8 @@ export function SettingsDialog({ initial, connected, onCancel, onSave }: { initi
   );
 }
 
-export function TestGridDialog({ onCancel, onCreate }: { onCancel: () => void; onCreate: (spec: GridSpec, labelPower: number, labelDepth: number) => void }) {
-  const [s, setS] = useState<GridSpec>(GRID_DEFAULTS);
+export function TestGridDialog({ speedMode, onCancel, onCreate }: { speedMode?: boolean; onCancel: () => void; onCreate: (spec: GridSpec, labelPower: number, labelDepth: number) => void }) {
+  const [s, setS] = useState<GridSpec>(speedMode ? { ...GRID_DEFAULTS, depthMin: 3000, depthMax: 600, cell: 8, speedMode: true } : GRID_DEFAULTS);
   const [labelPower, setLabelPower] = useState(30);
   const [labelDepth, setLabelDepth] = useState(50);
   const layout = gridLayout(s);
@@ -324,12 +324,12 @@ export function TestGridDialog({ onCancel, onCreate }: { onCancel: () => void; o
           <input type="number" min="1" max="12" value={s.cols} onChange={n('cols')} />
         </label>
         <label>
-          Depth from
-          <input type="number" min="1" max="100" value={s.depthMin} onChange={n('depthMin')} />
+          {speedMode ? 'Speed mm/min from' : 'Depth from'}
+          <input type="number" min="1" max={speedMode ? 30000 : 100} value={s.depthMin} onChange={n('depthMin')} />
         </label>
         <label>
           to
-          <input type="number" min="1" max="100" value={s.depthMax} onChange={n('depthMax')} />
+          <input type="number" min="1" max={speedMode ? 30000 : 100} value={s.depthMax} onChange={n('depthMax')} />
         </label>
         <label>
           steps

@@ -11,13 +11,13 @@ const HOT_POWER = 90;
 const HOT_DEPTH = 80;
 const LONG_JOB_S = 20 * 60;
 
-export function jobWarnings(items: Item[], seconds: number): Warning[] {
+export function jobWarnings(items: Item[], seconds: number, machine: 'lp2' | 'grbl' = 'lp2'): Warning[] {
   const out: Warning[] = [];
-  const hot = items.filter((i) => i.power >= HOT_POWER && i.depth >= HOT_DEPTH);
+  const hot = items.filter((i) => i.power >= HOT_POWER && (machine === 'grbl' ? (i.speed ?? 1500) <= 600 : i.depth >= HOT_DEPTH));
   if (hot.length)
     out.push({
       level: 'danger',
-      text: `${names(hot)}: power ${hot[0].power} % at depth ${hot[0].depth} burns very hard. Wood, paper, leather and card can scorch or catch fire. Use a test grid first if this material is new.`,
+      text: `${names(hot)}: power ${hot[0].power} % at ${machine === 'grbl' ? `${hot[0].speed ?? 1500} mm/min` : `depth ${hot[0].depth}`} burns very hard. Wood, paper, leather and card can scorch or catch fire. Use a test grid first if this material is new.`,
     });
   const many = items.filter((i) => i.passes >= 5);
   if (many.length) out.push({ level: 'caution', text: `${names(many)}: ${many[0].passes} passes heats the same spot again and again. Check for scorching between passes.` });

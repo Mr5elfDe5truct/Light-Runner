@@ -17,6 +17,7 @@ export const MODE_LABEL: Record<ImageMode | VectorMode, string> = {
 };
 
 interface Props {
+  machine: 'lp2' | 'grbl';
   item: Item;
   materials: Material[];
   lockAspect: boolean;
@@ -43,7 +44,7 @@ const ALIGN: { how: Align; label: string; title: string }[] = [
   { how: 'bottom', label: '⤓', title: 'Align to the bottom edge' },
 ];
 
-export function Properties({ item, materials, lockAspect, onLockAspect, onChange, onMaterial, onSaveMaterial, onTrace, onOffset, onExportGcode, onDuplicate, onDelete, onOrder }: Props) {
+export function Properties({ machine, item, materials, lockAspect, onLockAspect, onChange, onMaterial, onSaveMaterial, onTrace, onOffset, onExportGcode, onDuplicate, onDelete, onOrder }: Props) {
   const [offset, setOffset] = useState(1);
   const num = (key: keyof Item, value: string) => onChange({ [key]: Number(value) } as Partial<Item>, key);
   const resize = (key: 'w' | 'h', value: number) => {
@@ -193,7 +194,11 @@ export function Properties({ item, materials, lockAspect, onLockAspect, onChange
         </div>
       </label>
       <Slider label="Power %" value={item.power} min={1} max={100} onChange={(v) => onChange({ power: v, material: undefined }, 'power')} />
-      <Slider label="Depth" value={item.depth} min={1} max={100} onChange={(v) => onChange({ depth: v, material: undefined }, 'depth')} />
+      {machine === 'grbl' ? (
+        <Slider label="Speed mm/min" value={item.speed ?? 1500} min={50} max={12000} onChange={(v) => onChange({ speed: v, material: undefined }, 'speed')} />
+      ) : (
+        <Slider label="Depth" value={item.depth} min={1} max={100} onChange={(v) => onChange({ depth: v, material: undefined }, 'depth')} />
+      )}
       <label>
         Passes
         <input type="number" min="1" max="50" value={item.passes} onChange={(e) => onChange({ passes: Math.max(1, Math.min(50, Math.round(Number(e.target.value)) || 1)), material: undefined }, 'passes')} />
@@ -224,6 +229,7 @@ export function Properties({ item, materials, lockAspect, onLockAspect, onChange
 }
 
 interface MultiProps {
+  machine: 'lp2' | 'grbl';
   onCombine: (op: BooleanOp) => void;
   items: Item[];
   materials: Material[];
@@ -235,7 +241,7 @@ interface MultiProps {
 }
 
 /** Editing several items at once: alignment as a group, and laser settings for all of them. */
-export function MultiProperties({ items, materials, onChangeAll, onAlign, onMaterial, onDuplicate, onDelete, onCombine }: MultiProps) {
+export function MultiProperties({ machine, items, materials, onChangeAll, onAlign, onMaterial, onDuplicate, onDelete, onCombine }: MultiProps) {
   const allShapes = items.every((i) => i.kind === 'vector');
   const first = items[0];
   const same = <K extends keyof Item>(k: K) => items.every((i) => i[k] === first[k]);
@@ -283,7 +289,11 @@ export function MultiProperties({ items, materials, onChangeAll, onAlign, onMate
         </select>
       </label>
       <Slider label={`Power %${same('power') ? '' : ' (mixed)'}`} value={first.power} min={1} max={100} onChange={(v) => onChangeAll({ power: v, material: undefined }, 'power')} />
-      <Slider label={`Depth${same('depth') ? '' : ' (mixed)'}`} value={first.depth} min={1} max={100} onChange={(v) => onChangeAll({ depth: v, material: undefined }, 'depth')} />
+      {machine === 'grbl' ? (
+        <Slider label={`Speed mm/min${same('speed') ? '' : ' (mixed)'}`} value={first.speed ?? 1500} min={50} max={12000} onChange={(v) => onChangeAll({ speed: v, material: undefined }, 'speed')} />
+      ) : (
+        <Slider label={`Depth${same('depth') ? '' : ' (mixed)'}`} value={first.depth} min={1} max={100} onChange={(v) => onChangeAll({ depth: v, material: undefined }, 'depth')} />
+      )}
       <label>
         Passes{same('passes') ? '' : ' (mixed)'}
         <input type="number" min="1" max="50" value={first.passes} onChange={(e) => onChangeAll({ passes: Math.max(1, Math.min(50, Math.round(Number(e.target.value)) || 1)), material: undefined }, 'passes')} />
