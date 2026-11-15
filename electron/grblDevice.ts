@@ -3,6 +3,7 @@
  * supports hold (pause), resume, stop (feed hold + soft reset) and a laser-off frame for placement.
  */
 import { EventEmitter } from 'node:events';
+import { appendFileSync } from 'node:fs';
 import { DEFAULT_PROFILE, frameGcode, GRBL_BAUD, linesToSend, parseGrblSettings, parseGrblStatus, profileFromSettings, programLines, type MachineProfile } from '../shared/grbl.ts';
 import type { DeviceInfo, JobSpec, LaserEvent, PreviewSpec, RunPhase } from '../shared/types.ts';
 
@@ -36,7 +37,20 @@ export class GrblLaser extends EventEmitter {
     return !!this.port?.isOpen;
   }
 
+  /** Optional trace of the whole conversation (set LR_GRBL_LOG to a file path). */
+  private trace(dir: '>' | '<', text: string) {
+    const file = process.env.LR_GRBL_LOG;
+    if (!file) return;
+    try {
+      const shown = text.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+      appendFileSync(file, `${new Date().toISOString().slice(11, 23)} ${dir} ${shown}\n`);
+    } catch {
+      // tracing must never break a job
+    }
+  }
+
   private onLine(line: string) {
+    this.trace('<', line);
     if (line.startsWith('<')) {
       const s = parseGrblStatus(line);
       if (s) {
@@ -71,6 +85,7 @@ export class GrblLaser extends EventEmitter {
   private total = 0;
 
   private write(s: string | Buffer): Promise<void> {
+    this.trace('>', typeof s === 'string' ? s : `[${[...s].map((b) => b.toString(16)).join(' ')}]`);
     const port = this.port;
     if (!port?.isOpen) return Promise.reject(new Error('Not connected.'));
     return new Promise((resolve, reject) => port.write(s, (e) => (e ? reject(e) : resolve())));

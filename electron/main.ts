@@ -99,6 +99,8 @@ handle('laser:apply-settings', async (s: DeviceSettings) => {
   if (laser.connected) await laser.applySettings(s);
 });
 
+// While developing, keep a trace of everything said to a G-code laser.
+if (!app.isPackaged && !process.env.LR_GRBL_LOG) process.env.LR_GRBL_LOG = path.join(app.getPath('temp'), 'light-runner-grbl.log');
 app.whenReady().then(createWindow);
 app.on('window-all-closed', async () => {
   if (laser.connected) await laser.stop().catch(() => undefined);
