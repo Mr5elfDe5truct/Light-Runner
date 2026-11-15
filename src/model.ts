@@ -1,4 +1,5 @@
 import type { Point, Resolution } from '../shared/lp2.ts';
+import type { DitherMethod } from './dither.ts';
 
 /** The LP2's work field, in millimetres. */
 export const FIELD_MM = 100;
@@ -22,6 +23,19 @@ interface Common {
   passes: number;
   resolution: Resolution; // for anything engraved as pixels
   material?: string;
+  text?: TextSource; // set on text items, so batches can rewrite them
+}
+
+/** How a text item was made, so it can be redrawn with new words (batches, serial numbers). */
+export interface TextSource {
+  template: string;
+  style: 'filled' | 'single';
+  font: string;
+  bold: boolean;
+  italic: boolean;
+  heightMm: number;
+  align: 'left' | 'center' | 'right';
+  arc?: { radiusMm: number; bottom: boolean };
 }
 
 export interface VectorItem extends Common {
@@ -40,6 +54,11 @@ export interface ImageItem extends Common {
   invert: boolean;
   brightness: number; // -100..100
   contrast: number; // -100..100
+  ditherMethod: DitherMethod;
+  gamma: number; // 0.3..3, 1 = unchanged
+  sharpen: number; // 0..100
+  removeBackground: boolean;
+  backgroundTolerance: number; // 0..100
 }
 
 export type Item = VectorItem | ImageItem;
@@ -47,7 +66,7 @@ export type Item = VectorItem | ImageItem;
 export const newId = () => Math.random().toString(36).slice(2, 10);
 
 export const DEFAULTS = { power: 30, depth: 50, passes: 1, resolution: '1K' as Resolution, rotation: 0, flipX: false, flipY: false };
-export const IMAGE_DEFAULTS = { threshold: 128, invert: false, brightness: 0, contrast: 0 };
+export const IMAGE_DEFAULTS = { threshold: 128, invert: false, brightness: 0, contrast: 0, ditherMethod: 'floyd' as DitherMethod, gamma: 1, sharpen: 0, removeBackground: false, backgroundTolerance: 25 };
 
 /** Fills in fields added after a project was saved. */
 export function normalizeItem(raw: Item): Item {

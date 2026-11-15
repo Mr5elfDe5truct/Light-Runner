@@ -3,20 +3,24 @@ import { estimateSeconds, formatDuration } from '../shared/estimate.ts';
 import type { DeviceSettings, Status } from '../shared/lp2.ts';
 import type { DeviceInfo, JobSpec, LaserEvent, Material, PortInfo, RunPhase } from '../shared/types.ts';
 import { barcodePaths, qrPaths } from './codes.ts';
-import { AboutDialog, CodeDialog, ConfirmDialog, LogDrawer, PdfPageDialog, SaveMaterialDialog, SettingsDialog, TestGridDialog, TextDialog, type CodeChoice, type TextChoice } from './dialogs.tsx';
+import { AboutDialog, BatchDialog, CodeDialog, ConfirmDialog, NextPartDialog, LogDrawer, PdfPageDialog, SaveMaterialDialog, SettingsDialog, TestGridDialog, TextDialog, type CodeChoice, type TextChoice } from './dialogs.tsx';
 import { alignGroupToField, boundsOf, insideField } from './geometry.ts';
 import { hersheyText } from './hershey.ts';
 import { buildJobs, gcodeText, loadImage, previewUrl, traceItem } from './imaging.ts';
 import { readDxf, readGcode, type Outline } from './importers.ts';
-import { DEFAULTS, fitToField, IMAGE_DEFAULTS, newId, normalizeItem, type ImageItem, type Item, type VectorItem } from './model.ts';
+import { DEFAULTS, fitToField, IMAGE_DEFAULTS, newId, normalizeItem, type ImageItem, type Item, type TextSource, type VectorItem } from './model.ts';
 import { pdfPageCount, renderPdfPage } from './pdf.ts';
 import { MODE_LABEL, MultiProperties, Properties } from './Properties.tsx';
 import { shapePaths, SHAPES, type ShapeKind } from './shapes.ts';
 import { gridLayout, type GridSpec } from './testGrid.ts';
 import { jobWarnings, type Warning } from './safety.ts';
 import { useHistory } from './useHistory.ts';
+import { makeTextItem, rewordItem } from './textItems.ts';
+import { BATCH_DEFAULTS, batchCount, batchValues, fillTemplate, hasPlaceholders, type BatchSpec } from './batch.ts';
+import { combineItems, offsetItem } from './vectorOps.ts';
 import { readSvg, textImage } from './vector.ts';
 import { Workspace } from './Workspace.tsx';
+import { CameraDialog } from './CameraDialog.tsx';
 
 const laser = window.laser;
 const MY_MATERIALS_KEY = 'lightrunner.materials';
@@ -30,7 +34,7 @@ interface RunState {
   size?: number;
 }
 type LogLine = { level: string; message: string; at: string };
-type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about';
+type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera';
 
 function presetMode(item: Item): 'line' | 'fill' | 'image' {
   if (item.kind === 'vector') return item.mode === 'line' ? 'line' : 'fill';
@@ -79,6 +83,10 @@ export function App() {
   const [pdf, setPdf] = useState<{ name: string; data: ArrayBuffer; pages: number } | null>(null);
   const [confirm, setConfirm] = useState<{ items: Item[]; jobs: JobSpec[]; seconds: number; warnings: Warning[] } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [batchWait, setBatchWait] = useState<{ done: number; total: number; resolve: (go: boolean) => void } | null>(null);
+  const [batchPerPart, setBatchPerPart] = useState(0);
+  const batchStop = useRef(false);
+  const [cameraBg, setCameraBg] = useState<{ url: string; opacity: number; show: boolean } | null>(null);
   const [settings, setSettings] = useState<DeviceSettings>({ beep: false, reverseDirection: false });
   const [busy, setBusy] = useState(false);
   const [runStarted, setRunStarted] = useState<number | null>(null);
@@ -151,7 +159,7 @@ export function App() {
   // Keep the on-screen look of images up to date. Each image is drawn once per look and cached,
   // so a change to one doesn't redraw the rest and one failure can't hold up the others.
   const previewCache = useRef(new Map<string, string>());
-  const lookOf = (i: ImageItem) => [i.src.length, i.src.slice(-32), i.mode, i.threshold, i.invert, i.brightness, i.contrast, i.w.toFixed(1), i.h.toFixed(1), i.resolution].join(':');
+  const lookOf = (i: ImageItem) => [i.src.length, i.src.slice(-32), i.mode, i.threshold, i.invert, i.brightness, i.contrast, i.ditherMethod, i.gamma, i.sharpen, i.removeBackground, i.backgroundTolerance, i.w.toFixed(1), i.h.toFixed(1), i.resolution].join(':');
   const imageKey = items
     .filter((i): i is ImageItem => i.kind === 'image')
     .map((i) => `${i.id}=${lookOf(i)}`)
@@ -282,16 +290,22 @@ export function App() {
 
   const addText = (t: TextChoice) => {
     setDialog(null);
-    const label = `Text: ${t.text.replace(/\s+/g, ' ').slice(0, 24)}`;
-    if (t.style === 'single') {
-      const h = hersheyText(t.text, t.heightMm, t.align);
-      if (!h.paths.length) return fail(new Error('None of those characters are in the single-line font.'));
-      const item = vectorItem(label, { paths: h.paths, width: h.width, height: h.height }, 100);
-      return addItems([{ ...item, w: h.width, h: h.height, x: (100 - h.width) / 2, y: (100 - h.height) / 2 }]);
+    const src: TextSource = {
+      template: t.text,
+      style: t.style,
+      font: t.font,
+      bold: t.bold,
+      italic: t.italic,
+      heightMm: t.style === 'single' ? t.heightMm : 5,
+      align: t.align,
+      arc: t.style === 'single' && t.arc ? { radiusMm: t.radiusMm, bottom: t.bottom } : undefined,
+    };
+    try {
+      // Show the first part's words while designing; batches fill in each part's.
+      addItems([makeTextItem(src, fillTemplate(t.text, batchValues(BATCH_DEFAULTS, 0)))]);
+    } catch (e) {
+      fail(e);
     }
-    const { src, aspect } = textImage(t.text, t.font, t.bold, t.italic);
-    const h = 8 * t.text.split('\n').length;
-    addItems([imageItem(label, src, h * aspect, h, { mode: 'bw', ...fitToField(h * aspect, h, 60) })]);
   };
 
   const addCode = async (c: CodeChoice) => {
@@ -515,6 +529,40 @@ export function App() {
       }
     });
 
+  /** Opens the batch dialog with a time estimate for one part. */
+  const askBatch = () =>
+    act(async () => {
+      if (!visible.length) throw new Error('Add something to engrave first.');
+      const outside = visible.filter((i) => !insideField(i));
+      if (outside.length) throw new Error(`${outside.map((i) => i.name).join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the field.`);
+      const jobs = await buildJobs(visible);
+      setBatchPerPart(jobs.reduce((s, j) => s + estimateSeconds(j), 0));
+      setDialog('batch');
+    });
+
+  const runBatch = (spec: BatchSpec) =>
+    act(async () => {
+      setDialog(null);
+      batchStop.current = false;
+      const total = batchCount(spec);
+      const base = visible;
+      if (run.phase === 'previewing') await laser.stopPreview();
+      for (let i = 0; i < total && !batchStop.current; i++) {
+        const values = batchValues(spec, i);
+        const part = base.map((it) => (it.text && hasPlaceholders(it.text.template) ? rewordItem(it, fillTemplate(it.text.template, values)) : it));
+        const jobs = await buildJobs(part);
+        note(`Batch part ${i + 1} of ${total}${spec.lines.length ? `: ${values.line}` : `: #${values.n}`}.`);
+        await laser.run(jobs);
+        if (batchStop.current) break;
+        if (i < total - 1) {
+          const go = await new Promise<boolean>((resolve) => setBatchWait({ done: i + 1, total, resolve }));
+          setBatchWait(null);
+          if (!go) break;
+        }
+      }
+      note(batchStop.current ? 'Batch stopped.' : `Batch finished: ${total} parts.`);
+    });
+
   // ---------------------------------------------------------------- keyboard
 
   const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
@@ -648,6 +696,9 @@ export function App() {
           <button onClick={() => setDialog('grid')} title="A grid of power and depth settings to test a material">
             Test grid
           </button>
+          <button onClick={() => setDialog('camera')} title="See the real object under your design (webcam or photo)">
+            Camera
+          </button>
           <button onClick={addSelfTest} title="One of each kind of job, to check the laser and the app on scrap">
             Self-test
           </button>
@@ -676,7 +727,19 @@ export function App() {
             onSelect={select}
             onMoveStart={history.checkpoint}
             onMove={(pos) => history.replace((l) => l.map((i) => (pos.has(i.id) ? { ...i, ...pos.get(i.id)! } : i)))}
+            background={cameraBg?.show ? cameraBg : null}
           />
+          {cameraBg && (
+            <div className="camera-bar">
+              <label className="check">
+                <input type="checkbox" checked={cameraBg.show} onChange={(e) => setCameraBg({ ...cameraBg, show: e.target.checked })} /> Photo
+              </label>
+              <input type="range" min="10" max="100" value={Math.round(cameraBg.opacity * 100)} onChange={(e) => setCameraBg({ ...cameraBg, opacity: Number(e.target.value) / 100 })} title="How strongly the photo shows" />
+              <button className="small" onClick={() => setDialog('camera')}>
+                Retake
+              </button>
+            </div>
+          )}
           {!items.length && <div className="empty">Import an SVG, DXF, PDF, G-code or picture (or drop it here), or add text, a shape, a QR code or a test grid.</div>}
         </section>
 
@@ -706,6 +769,13 @@ export function App() {
               onMaterial={(id) => applyMaterial([sel], id)}
               onSaveMaterial={() => setDialog('material')}
               onTrace={trace}
+              onOffset={(mm) => {
+                try {
+                  if (sel.kind === 'vector') addItems([offsetItem(sel, mm)]);
+                } catch (e) {
+                  fail(e);
+                }
+              }}
               onExportGcode={() => sel.kind === 'vector' && download(`${sel.name.replace(/\.[^.]+$/, '')}.gcode`, gcodeText(sel))}
               onDuplicate={() => duplicate()}
               onDelete={removeSelected}
@@ -722,6 +792,16 @@ export function App() {
                 updateMany(selected, (i) => pos.get(i.id) ?? {});
               }}
               onMaterial={(id) => applyMaterial(selItems, id)}
+              onCombine={(op) => {
+                try {
+                  const shapes = items.filter((i): i is VectorItem => selected.has(i.id) && i.kind === 'vector');
+                  const made = combineItems(shapes, op);
+                  history.commit((l) => [...l.filter((i) => !selected.has(i.id)), made]);
+                  setSelection([made.id]);
+                } catch (e) {
+                  fail(e);
+                }
+              }}
               onDuplicate={() => duplicate()}
               onDelete={removeSelected}
             />
@@ -765,7 +845,17 @@ export function App() {
             Pause
           </button>
         )}
-        <button className="danger" onClick={() => act(() => laser.stop())} disabled={!device || run.phase === 'idle'}>
+        <button onClick={askBatch} disabled={!device || busy || working} title="Engrave the design on several parts, with serial numbers or names">
+          Batch…
+        </button>
+        <button
+          className="danger"
+          onClick={() => {
+            batchStop.current = true;
+            act(() => laser.stop());
+          }}
+          disabled={!device || run.phase === 'idle'}
+        >
           Stop
         </button>
       </footer>
@@ -784,6 +874,40 @@ export function App() {
 
       {confirm && <ConfirmDialog items={confirm.items} jobs={confirm.jobs.length} seconds={confirm.seconds} warnings={confirm.warnings} onCancel={() => setConfirm(null)} onGo={() => engrave(confirm.jobs)} />}
       {dialog === 'text' && <TextDialog onCancel={() => setDialog(null)} onAdd={addText} />}
+      {dialog === 'batch' && (
+        <BatchDialog
+          templates={visible.filter((i) => i.text && hasPlaceholders(i.text.template)).map((i) => i.text!.template)}
+          secondsPerPart={batchPerPart}
+          onCancel={() => setDialog(null)}
+          onStart={runBatch}
+        />
+      )}
+      {batchWait && (
+        <NextPartDialog
+          done={batchWait.done}
+          total={batchWait.total}
+          onNext={() => batchWait.resolve(true)}
+          onStop={() => {
+            batchStop.current = true;
+            batchWait.resolve(false);
+          }}
+        />
+      )}
+      {dialog === 'camera' && (
+        <CameraDialog
+          connected={!!device}
+          previewing={run.phase === 'previewing'}
+          onTraceField={() => laser.preview({ x: 0, y: 0, width: 1000, height: 1000, brightness })}
+          onStopTrace={() => laser.stopPreview()}
+          onCancel={() => setDialog(null)}
+          onDone={(url) => {
+            setCameraBg({ url, opacity: 0.6, show: true });
+            setDialog(null);
+            if (run.phase === 'previewing') laser.stopPreview().catch(() => undefined);
+            note('The photo is under your design. Line the design up with the object, then Preview to check.');
+          }}
+        />
+      )}
       {dialog === 'about' && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog === 'code' && <CodeDialog onCancel={() => setDialog(null)} onAdd={addCode} />}
       {dialog === 'grid' && <TestGridDialog onCancel={() => setDialog(null)} onCreate={addTestGrid} />}

@@ -5,6 +5,7 @@ import type { DeviceSettings } from '../shared/lp2.ts';
 import { BARCODE_FORMATS, type QrLevel } from './codes.ts';
 import { supported } from './hershey.ts';
 import { needsAttendance, type Warning } from './safety.ts';
+import { BATCH_DEFAULTS, batchCount, batchValues, fillTemplate, type BatchSpec } from './batch.ts';
 import type { JobSpec } from '../shared/types.ts';
 import { MODE_LABEL } from './Properties.tsx';
 import type { Item } from './model.ts';
@@ -83,10 +84,13 @@ export interface TextChoice {
   italic: boolean;
   heightMm: number; // capital-letter height for single-line text
   align: 'left' | 'center' | 'right';
+  arc: boolean;
+  radiusMm: number;
+  bottom: boolean;
 }
 
 export function TextDialog({ onCancel, onAdd }: { onCancel: () => void; onAdd: (t: TextChoice) => void }) {
-  const [t, setT] = useState<TextChoice>({ text: '', style: 'filled', font: FONTS[0], bold: true, italic: false, heightMm: 5, align: 'left' });
+  const [t, setT] = useState<TextChoice>({ text: '', style: 'filled', font: FONTS[0], bold: true, italic: false, heightMm: 5, align: 'left', arc: false, radiusMm: 20, bottom: false });
   const missing = t.style === 'single' ? [...new Set([...t.text].filter((c) => c !== '\n' && !supported(c)))] : [];
   return (
     <Modal title="Add text" onClose={onCancel}>
@@ -131,21 +135,46 @@ export function TextDialog({ onCancel, onAdd }: { onCancel: () => void; onAdd: (
           </label>
         </div>
       ) : (
-        <div className="row">
-          <label className="grow">
-            Letter height mm
-            <input type="number" min="0.5" max="80" step="0.5" value={t.heightMm} onChange={(e) => setT({ ...t, heightMm: Number(e.target.value) })} />
-          </label>
-          <label className="grow">
-            Lines
-            <select value={t.align} onChange={(e) => setT({ ...t, align: e.target.value as TextChoice['align'] })}>
-              <option value="left">Left</option>
-              <option value="center">Centred</option>
-              <option value="right">Right</option>
-            </select>
-          </label>
-        </div>
+        <>
+          <div className="row">
+            <label className="grow">
+              Letter height mm
+              <input type="number" min="0.5" max="80" step="0.5" value={t.heightMm} onChange={(e) => setT({ ...t, heightMm: Number(e.target.value) })} />
+            </label>
+            {!t.arc && (
+              <label className="grow">
+                Lines
+                <select value={t.align} onChange={(e) => setT({ ...t, align: e.target.value as TextChoice['align'] })}>
+                  <option value="left">Left</option>
+                  <option value="center">Centred</option>
+                  <option value="right">Right</option>
+                </select>
+              </label>
+            )}
+          </div>
+          <div className="row">
+            <label className="check grow">
+              <input type="checkbox" checked={t.arc} onChange={(e) => setT({ ...t, arc: e.target.checked })} /> Around a circle (for badges, lids and coasters)
+            </label>
+          </div>
+          {t.arc && (
+            <div className="row">
+              <label className="grow">
+                Circle radius mm
+                <input type="number" min="3" max="50" step="0.5" value={t.radiusMm} onChange={(e) => setT({ ...t, radiusMm: Number(e.target.value) })} />
+              </label>
+              <label className="grow">
+                Placed
+                <select value={t.bottom ? 'bottom' : 'top'} onChange={(e) => setT({ ...t, bottom: e.target.value === 'bottom' })}>
+                  <option value="top">Along the top</option>
+                  <option value="bottom">Along the bottom</option>
+                </select>
+              </label>
+            </div>
+          )}
+        </>
       )}
+      <p className="hint">Tip: type {'{n}'} for a serial number or {'{line}'} for a name from a list, then use Batch to engrave a run of parts.</p>
       {missing.length > 0 && <p className="warn">This font has no {missing.join(' ')}; they'll be left blank.</p>}
       <div className="buttons">
         <button onClick={onCancel}>Cancel</button>
@@ -435,6 +464,86 @@ export function LogDrawer({ log, onClose }: { log: { level: string; message: str
         ))}
       </div>
     </div>
+  );
+}
+
+export function BatchDialog({ templates, secondsPerPart, onCancel, onStart }: { templates: string[]; secondsPerPart: number; onCancel: () => void; onStart: (spec: BatchSpec) => void }) {
+  const [spec, setSpec] = useState<BatchSpec>(BATCH_DEFAULTS);
+  const [listText, setListText] = useState('');
+  const [attending, setAttending] = useState(false);
+  const lines = listText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const usesLine = templates.some((t) => t.includes('{line}'));
+  const full = { ...spec, lines: usesLine ? lines : [] };
+  const total = batchCount(full);
+  const n = (key: keyof BatchSpec) => (e: React.ChangeEvent<HTMLInputElement>) => setSpec({ ...spec, [key]: Number(e.target.value) });
+  return (
+    <Modal title="Batch: engrave a run of parts" onClose={onCancel}>
+      <p className="hint">
+        Engraves everything ticked, once per part, and waits for you to put the next part in place. Text with {'{n}'} gets a counting number; {'{line}'} takes the next line from a list.
+      </p>
+      {templates.length === 0 && <p className="hint">No text uses {'{n}'} or {'{line}'}, so every part will be the same.</p>}
+      {!usesLine && (
+        <div className="grid3">
+          <label>
+            Parts
+            <input type="number" min="1" max="999" value={spec.count} onChange={n('count')} />
+          </label>
+          <label>
+            First number
+            <input type="number" value={spec.start} onChange={n('start')} />
+          </label>
+          <label>
+            Count by
+            <input type="number" value={spec.step} onChange={n('step')} />
+          </label>
+          <label>
+            Digits
+            <input type="number" min="1" max="10" value={spec.digits} onChange={n('digits')} />
+          </label>
+        </div>
+      )}
+      {usesLine && (
+        <label>
+          One {'{line}'} per part
+          <textarea rows={5} value={listText} onChange={(e) => setListText(e.target.value)} placeholder={'Ann\nBen\nCara'} />
+        </label>
+      )}
+      {templates.length > 0 && (
+        <div className="hint">
+          First parts: {Array.from({ length: Math.min(3, total) }, (_, i) => templates.map((t) => fillTemplate(t, batchValues(full, i))).join(' / ')).join(' · ')}
+          {total > 3 ? ' …' : ''}
+        </div>
+      )}
+      <p className="estimate">
+        {total} part{total === 1 ? '' : 's'}, about {formatDuration(secondsPerPart)} each (about {formatDuration(secondsPerPart * total)} of engraving).
+      </p>
+      <label className="check">
+        <input type="checkbox" checked={attending} onChange={(e) => setAttending(e.target.checked)} /> I'll stay with the laser and swap the parts
+      </label>
+      <div className="buttons">
+        <button onClick={onCancel}>Cancel</button>
+        <button className="primary" disabled={!attending || (usesLine && !lines.length)} onClick={() => onStart(full)}>
+          Start
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+export function NextPartDialog({ done, total, onNext, onStop }: { done: number; total: number; onNext: () => void; onStop: () => void }) {
+  return (
+    <Modal title={`Part ${done} of ${total} done`} onClose={() => undefined}>
+      <p>Take out the finished part and put the next one in place. Use Preview first if you need to check the position.</p>
+      <div className="buttons">
+        <button onClick={onStop}>Stop the batch</button>
+        <button className="primary" autoFocus onClick={onNext}>
+          Engrave part {done + 1}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

@@ -18,6 +18,7 @@ interface Props {
   onSelect: (ids: string[], additive: boolean) => void;
   onMoveStart: () => void;
   onMove: (positions: Map<string, { x: number; y: number }>) => void;
+  background?: { url: string; opacity: number } | null;
 }
 
 const transformOf = (i: Item) => {
@@ -31,7 +32,7 @@ type Gesture =
   | { kind: 'pan'; x: number; y: number; cx: number; cy: number; moved: boolean }
   | { kind: 'box'; start: { x: number; y: number }; now: { x: number; y: number }; additive: boolean };
 
-export function Workspace({ items, previews, selected, snap, onSelect, onMoveStart, onMove }: Props) {
+export function Workspace({ items, previews, selected, snap, onSelect, onMoveStart, onMove, background }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ zoom: 1, cx: FIELD_MM / 2, cy: FIELD_MM / 2 });
   const [gesture, setGesture] = useState<Gesture | null>(null);
@@ -147,6 +148,7 @@ export function Workspace({ items, previews, selected, snap, onSelect, onMoveSta
         }}
       >
         <rect x={0} y={0} width={FIELD_MM} height={FIELD_MM} className="field" />
+        {background && <image href={background.url} x={0} y={0} width={FIELD_MM} height={FIELD_MM} opacity={background.opacity} preserveAspectRatio="none" />}
         {grid}
         {items
           .filter((i) => i.visible)

@@ -2,7 +2,10 @@
 import type { Resolution } from '../shared/lp2.ts';
 import type { Material } from '../shared/types.ts';
 import { alignToField, insideField, type Align } from './geometry.ts';
+import { useState } from 'react';
+import { DITHER_LABEL, type DitherMethod } from './dither.ts';
 import type { ImageMode, Item, VectorMode } from './model.ts';
+import type { BooleanOp } from './raster.ts';
 
 export const MODE_LABEL: Record<ImageMode | VectorMode, string> = {
   line: 'Line (outline)',
@@ -23,6 +26,7 @@ interface Props {
   onMaterial: (id: string) => void;
   onSaveMaterial: () => void;
   onTrace: () => void;
+  onOffset: (mm: number) => void;
   onExportGcode: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -39,7 +43,8 @@ const ALIGN: { how: Align; label: string; title: string }[] = [
   { how: 'bottom', label: '⤓', title: 'Align to the bottom edge' },
 ];
 
-export function Properties({ item, materials, lockAspect, onLockAspect, onChange, onMaterial, onSaveMaterial, onTrace, onExportGcode, onDuplicate, onDelete, onOrder }: Props) {
+export function Properties({ item, materials, lockAspect, onLockAspect, onChange, onMaterial, onSaveMaterial, onTrace, onOffset, onExportGcode, onDuplicate, onDelete, onOrder }: Props) {
+  const [offset, setOffset] = useState(1);
   const num = (key: keyof Item, value: string) => onChange({ [key]: Number(value) } as Partial<Item>, key);
   const resize = (key: 'w' | 'h', value: number) => {
     if (!(value > 0)) return;
@@ -115,8 +120,28 @@ export function Properties({ item, materials, lockAspect, onLockAspect, onChange
       {item.kind === 'image' && (
         <>
           {item.mode === 'bw' && <Slider label="Threshold" value={item.threshold} min={1} max={254} onChange={(v) => onChange({ threshold: v }, 'threshold')} />}
+          {(item.mode === 'dither' || item.mode === 'sketch') && (
+            <label>
+              Dither style
+              <select value={item.ditherMethod} onChange={(e) => onChange({ ditherMethod: e.target.value as DitherMethod })}>
+                {(Object.keys(DITHER_LABEL) as DitherMethod[]).map((m) => (
+                  <option key={m} value={m}>
+                    {DITHER_LABEL[m]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <Slider label="Brightness" value={item.brightness} min={-100} max={100} onChange={(v) => onChange({ brightness: v }, 'brightness')} />
           <Slider label="Contrast" value={item.contrast} min={-100} max={100} onChange={(v) => onChange({ contrast: v }, 'contrast')} />
+          <Slider label="Midtones (gamma ×100)" value={Math.round(item.gamma * 100)} min={30} max={300} onChange={(v) => onChange({ gamma: v / 100 }, 'gamma')} />
+          <Slider label="Sharpen" value={item.sharpen} min={0} max={100} onChange={(v) => onChange({ sharpen: v }, 'sharpen')} />
+          <div className="row">
+            <label className="check grow">
+              <input type="checkbox" checked={item.removeBackground} onChange={(e) => onChange({ removeBackground: e.target.checked })} /> Remove plain background
+            </label>
+          </div>
+          {item.removeBackground && <Slider label="Background tolerance" value={item.backgroundTolerance} min={1} max={100} onChange={(v) => onChange({ backgroundTolerance: v }, 'bgtol')} />}
           <div className="row">
             <label className="check grow">
               <input type="checkbox" checked={item.invert} onChange={(e) => onChange({ invert: e.target.checked })} /> Invert
@@ -126,6 +151,18 @@ export function Properties({ item, materials, lockAspect, onLockAspect, onChange
             </button>
           </div>
         </>
+      )}
+
+      {item.kind === 'vector' && (
+        <div className="row">
+          <label className="grow">
+            Offset mm (− inside)
+            <input type="number" step="0.1" value={offset} onChange={(e) => setOffset(Number(e.target.value))} />
+          </label>
+          <button className="small" onClick={() => onOffset(offset)} title="Make a new outline this far outside (or inside) the shape">
+            Make outline
+          </button>
+        </div>
       )}
 
       {!(item.kind === 'vector' && item.mode === 'line') && (
@@ -187,6 +224,7 @@ export function Properties({ item, materials, lockAspect, onLockAspect, onChange
 }
 
 interface MultiProps {
+  onCombine: (op: BooleanOp) => void;
   items: Item[];
   materials: Material[];
   onChangeAll: (patch: Partial<Item>, key?: string) => void;
@@ -197,7 +235,8 @@ interface MultiProps {
 }
 
 /** Editing several items at once: alignment as a group, and laser settings for all of them. */
-export function MultiProperties({ items, materials, onChangeAll, onAlign, onMaterial, onDuplicate, onDelete }: MultiProps) {
+export function MultiProperties({ items, materials, onChangeAll, onAlign, onMaterial, onDuplicate, onDelete, onCombine }: MultiProps) {
+  const allShapes = items.every((i) => i.kind === 'vector');
   const first = items[0];
   const same = <K extends keyof Item>(k: K) => items.every((i) => i[k] === first[k]);
   return (
@@ -211,6 +250,25 @@ export function MultiProperties({ items, materials, onChangeAll, onAlign, onMate
           </button>
         ))}
       </div>
+      {allShapes && (
+        <>
+          <h4>Combine shapes</h4>
+          <div className="row wrap">
+            <button className="small" onClick={() => onCombine('union')} title="One shape covering all of them">
+              Union
+            </button>
+            <button className="small" onClick={() => onCombine('subtract')} title="The first shape (top of the list) with the others cut out of it">
+              Cut out
+            </button>
+            <button className="small" onClick={() => onCombine('intersect')} title="Only where they all overlap">
+              Overlap
+            </button>
+            <button className="small" onClick={() => onCombine('exclude')} title="Where they don't overlap">
+              Exclude
+            </button>
+          </div>
+        </>
+      )}
       <h4>Laser</h4>
       <label>
         Material

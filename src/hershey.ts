@@ -51,6 +51,33 @@ function font(): Map<number, Glyph> {
 const LINE_HEIGHT = 32; // font units between lines
 const CAP_HEIGHT = 21; // font units from the top of a capital to the baseline
 
+/**
+ * Text bent around a circle of `radiusMm` (to the baseline), centred at the top and reading
+ * clockwise, or along the bottom reading anticlockwise when `bottom` is set (so it stays upright).
+ */
+export function hersheyArc(text: string, capHeightMm: number, radiusMm: number, bottom = false): { paths: Point[][]; width: number; height: number } {
+  const straight = hersheyText(text.replace(/\r?\n/g, ' '), capHeightMm);
+  if (!straight.paths.length) return straight;
+  const mid = straight.width / 2;
+  const baseline = straight.height; // the text box's bottom edge
+  const bent = straight.paths.map((s) =>
+    s.map(([x, y]) => {
+      const a = (x - mid) / radiusMm;
+      const r = bottom ? radiusMm + y : radiusMm + (baseline - y);
+      const theta = bottom ? Math.PI / 2 - a : -Math.PI / 2 + a;
+      return [r * Math.cos(theta), r * Math.sin(theta)] as Point;
+    }),
+  );
+  const all = bent.flat();
+  const x0 = Math.min(...all.map((p) => p[0]));
+  const y0 = Math.min(...all.map((p) => p[1]));
+  return {
+    paths: bent.map((s) => s.map(([x, y]) => [x - x0, y - y0] as Point)),
+    width: Math.max(...all.map((p) => p[0])) - x0,
+    height: Math.max(...all.map((p) => p[1])) - y0,
+  };
+}
+
 /** The characters this font can draw. */
 export function supported(ch: string): boolean {
   return ch in unwrap<Record<string, number>>(numbersModule);

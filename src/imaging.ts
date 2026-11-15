@@ -4,6 +4,7 @@ import type { JobSpec } from '../shared/types.ts';
 import { itemBounds, placedPaths, type Box } from './geometry.ts';
 import { newId, type ImageItem, type Item, type VectorItem } from './model.ts';
 import { traceContours } from './trace.ts';
+import { ditherWith, gammaAdjust, removeBackground, sharpen as sharpenGrey } from './dither.ts';
 
 const imageCache = new Map<string, Promise<HTMLImageElement>>();
 
@@ -130,10 +131,13 @@ export function sketch(grey: Uint8Array, width: number, height: number): Uint8Ar
 
 /** What the laser will make of an image, as 0..255 per pixel. */
 export async function processImage(item: ImageItem, width: number, height: number, placed = false): Promise<Uint8Array> {
-  const grey = await greyPixels(item, width, height, placed);
+  let grey = await greyPixels(item, width, height, placed);
+  if (item.removeBackground) grey = removeBackground(grey, width, height, (item.backgroundTolerance ?? 25) * 1.5);
+  grey = gammaAdjust(grey, item.gamma ?? 1);
+  grey = sharpenGrey(grey, width, height, item.sharpen ?? 0);
   if (item.mode === 'grey') return grey;
-  if (item.mode === 'dither') return dither(grey, width, height);
-  if (item.mode === 'sketch') return dither(sketch(grey, width, height), width, height);
+  if (item.mode === 'dither') return ditherWith(grey, width, height, item.ditherMethod ?? 'floyd');
+  if (item.mode === 'sketch') return ditherWith(sketch(grey, width, height), width, height, item.ditherMethod ?? 'floyd');
   return grey.map((v) => (v < item.threshold ? 0 : 255));
 }
 
