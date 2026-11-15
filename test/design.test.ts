@@ -7,6 +7,7 @@ import { readDxf, readGcode } from '../src/importers.ts';
 import { DEFAULTS, type VectorItem } from '../src/model.ts';
 import { shapePaths } from '../src/shapes.ts';
 import { GRID_DEFAULTS, gridLayout, steps } from '../src/testGrid.ts';
+import { jobWarnings, needsAttendance } from '../src/safety.ts';
 import { traceContours } from '../src/trace.ts';
 
 const square = (patch: Partial<VectorItem> = {}): VectorItem => ({
@@ -129,6 +130,16 @@ test('the material test grid spreads power and depth and stays in the field', ()
   assert.equal(g.labels.length, 10);
   assert.match(gridLayout({ ...GRID_DEFAULTS, cols: 12, cell: 10 }).problem ?? '', /must fit/);
   assert.deepEqual(steps(30, 30, 1), [30]);
+});
+
+test('safety checks flag hard burns, long jobs and tiny codes', () => {
+  assert.deepEqual(jobWarnings([square()], 60), []);
+  const hot = jobWarnings([square({ power: 100, depth: 90 })], 60);
+  assert.equal(hot[0].level, 'danger');
+  assert.ok(needsAttendance(hot));
+  assert.match(jobWarnings([square()], 45 * 60)[0].text, /45 min/);
+  assert.match(jobWarnings([square({ name: 'QR: hi', w: 5, h: 5 })], 60)[0].text, /phones/);
+  assert.ok(!needsAttendance(jobWarnings([square({ passes: 6 })], 60)));
 });
 
 test('every built-in shape fits its box', () => {

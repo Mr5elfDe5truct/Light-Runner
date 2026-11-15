@@ -1,6 +1,6 @@
 {
   "name": "light-runner",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Design and engrave on the LaserPecker LP2 without LaserPecker Design Space.",
   "type": "module",
@@ -11,15 +11,10 @@
     "build": "tsc --noEmit && vite build && node scripts/build-desktop.mjs",
     "start": "npm run build && electron .",
     "test": "tsx --test test/*.test.ts",
-    "dist": "npm run build && electron-builder --win"
+    "dist": "npm run build && electron-builder --win",
+    "icon": "node scripts/icon.mjs"
   },
   "dependencies": {
-    "hershey": "^2.1.7",
-    "jsbarcode": "^3.12.3",
-    "pdfjs-dist": "^6.5.438",
-    "qrcode-generator": "^2.0.4",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
     "serialport": "^13.0.0"
   },
   "devDependencies": {
@@ -30,6 +25,12 @@
     "electron": "^45.2.3",
     "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
+    "hershey": "^2.1.7",
+    "jsbarcode": "^3.12.3",
+    "pdfjs-dist": "^6.5.438",
+    "qrcode-generator": "^2.0.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.6"
@@ -48,7 +49,8 @@
       "THIRD_PARTY_NOTICES.md"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -57,7 +59,9 @@
       "menuCategory": "RG Studios",
       "shortcutName": "Light Runner",
       "createDesktopShortcut": true,
-      "artifactName": "Light-Runner-Setup-${version}.${ext}"
+      "artifactName": "Light-Runner-Setup-${version}.${ext}",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
     },
     "asarUnpack": [
       "node_modules/@serialport/**"

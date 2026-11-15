@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DeviceSettings } from '../shared/lp2.ts';
@@ -21,6 +21,7 @@ function createWindow() {
     title: 'Light Runner',
     backgroundColor: '#15171c',
     autoHideMenuBar: true,
+    icon: path.join(__dirname, '..', 'dist', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false },
   });
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
@@ -44,6 +45,29 @@ handle('laser:stop', () => laser.stop());
 handle('laser:preview', (spec: PreviewSpec) => laser.preview(spec));
 handle('laser:stop-preview', () => laser.stopPreview());
 handle('laser:materials', () => loadMaterials());
+
+// ---------------------------------------------------------------- about and updates
+
+const REPO = 'Mr5elfDe5truct/Light-Runner';
+const newer = (a: string, b: string) => {
+  const pa = a.replace(/^v/, '').split('.').map(Number);
+  const pb = b.replace(/^v/, '').split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
+  return false;
+};
+handle('app:info', () => ({ version: app.getVersion(), electron: process.versions.electron, data: app.getPath('userData') }));
+/** Asks GitHub for the newest published release. Nothing about the user is sent. */
+handle('app:check-update', async () => {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { 'User-Agent': 'Light-Runner-update-check', Accept: 'application/vnd.github+json' } });
+  if (res.status === 404) return { current: app.getVersion(), latest: null, url: null, newer: false, note: 'No releases have been published yet.' };
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}.`);
+  const body = (await res.json()) as { tag_name: string; html_url: string };
+  return { current: app.getVersion(), latest: body.tag_name, url: body.html_url, newer: newer(body.tag_name, app.getVersion()) };
+});
+handle('app:open-url', (url: string) => {
+  if (!/^https:\/\/github\.com\//.test(url)) throw new Error('Only GitHub links can be opened from here.');
+  return shell.openExternal(url);
+});
 
 const draftFile = () => path.join(app.getPath('userData'), 'draft.lightrunner.json');
 handle('app:save-draft', (json: string) => writeFile(draftFile(), json));

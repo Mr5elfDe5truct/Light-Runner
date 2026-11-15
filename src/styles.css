@@ -140,6 +140,7 @@ button.on { border-color: var(--accent); color: var(--accent); }
 .tabs { display: flex; gap: 4px; }
 .tabs button { flex: 1; }
 .estimate { margin: 2px 0; }
+.danger-note { color: #fff; background: rgba(255, 93, 93, 0.18); border: 1px solid var(--danger); border-radius: 6px; padding: 6px 8px; margin: 2px 0; }
 .side h3 .count { float: right; color: var(--muted); font-weight: 400; }
 .dialog input[type='text'] { width: 100%; }
 
@@ -151,3 +152,5 @@ button.on { border-color: var(--accent); color: var(--accent); }
 .dialog table { border-collapse: collapse; }
 .dialog td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); }
 .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.about { display: flex; gap: 14px; align-items: center; }
+.about img { border-radius: 14px; }

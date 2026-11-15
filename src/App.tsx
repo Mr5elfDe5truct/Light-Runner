@@ -3,7 +3,7 @@ import { estimateSeconds, formatDuration } from '../shared/estimate.ts';
 import type { DeviceSettings, Status } from '../shared/lp2.ts';
 import type { DeviceInfo, JobSpec, LaserEvent, Material, PortInfo, RunPhase } from '../shared/types.ts';
 import { barcodePaths, qrPaths } from './codes.ts';
-import { CodeDialog, ConfirmDialog, LogDrawer, PdfPageDialog, SaveMaterialDialog, SettingsDialog, TestGridDialog, TextDialog, type CodeChoice, type TextChoice } from './dialogs.tsx';
+import { AboutDialog, CodeDialog, ConfirmDialog, LogDrawer, PdfPageDialog, SaveMaterialDialog, SettingsDialog, TestGridDialog, TextDialog, type CodeChoice, type TextChoice } from './dialogs.tsx';
 import { alignGroupToField, boundsOf, insideField } from './geometry.ts';
 import { hersheyText } from './hershey.ts';
 import { buildJobs, gcodeText, loadImage, previewUrl, traceItem } from './imaging.ts';
@@ -13,6 +13,7 @@ import { pdfPageCount, renderPdfPage } from './pdf.ts';
 import { MODE_LABEL, MultiProperties, Properties } from './Properties.tsx';
 import { shapePaths, SHAPES, type ShapeKind } from './shapes.ts';
 import { gridLayout, type GridSpec } from './testGrid.ts';
+import { jobWarnings, type Warning } from './safety.ts';
 import { useHistory } from './useHistory.ts';
 import { readSvg, textImage } from './vector.ts';
 import { Workspace } from './Workspace.tsx';
@@ -29,7 +30,7 @@ interface RunState {
   size?: number;
 }
 type LogLine = { level: string; message: string; at: string };
-type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code';
+type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about';
 
 function presetMode(item: Item): 'line' | 'fill' | 'image' {
   if (item.kind === 'vector') return item.mode === 'line' ? 'line' : 'fill';
@@ -76,7 +77,8 @@ export function App() {
   const [snap, setSnap] = useState(false);
   const [dialog, setDialog] = useState<DialogName>(null);
   const [pdf, setPdf] = useState<{ name: string; data: ArrayBuffer; pages: number } | null>(null);
-  const [confirm, setConfirm] = useState<{ items: Item[]; jobs: JobSpec[]; seconds: number } | null>(null);
+  const [confirm, setConfirm] = useState<{ items: Item[]; jobs: JobSpec[]; seconds: number; warnings: Warning[] } | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
   const [settings, setSettings] = useState<DeviceSettings>({ beep: false, reverseDirection: false });
   const [busy, setBusy] = useState(false);
   const [runStarted, setRunStarted] = useState<number | null>(null);
@@ -121,8 +123,10 @@ export function App() {
       else if (e.type === 'run') setRun({ ...e });
       else if (e.type === 'log') note(e.message, e.level);
       else if (e.type === 'connection') {
-        setDevice(e.connected ? (e.info ?? null) : null);
-        if (!e.connected) {
+        setReconnecting(!e.connected && !!e.reconnecting);
+        if (e.connected) setDevice(e.info ?? null);
+        else if (!e.reconnecting) {
+          setDevice(null);
           setStatus(null);
           note('Disconnected from the laser.');
         }
@@ -343,6 +347,33 @@ export function App() {
     note(`Added a ${spec.cols} × ${spec.rows} material test (${cells.length} squares).`);
   };
 
+  /** A small set covering every kind of job, for checking a new version or a new laser on scrap. */
+  const addSelfTest = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 200;
+    canvas.height = 200;
+    const ctx = canvas.getContext('2d')!;
+    const g = ctx.createLinearGradient(0, 0, 200, 0);
+    g.addColorStop(0, '#000');
+    g.addColorStop(1, '#fff');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 200, 200);
+    const gradient = canvas.toDataURL('image/png');
+    const sq = shapePaths('square');
+    const circle = shapePaths('circle');
+    const label = hersheyText('LIGHT RUNNER TEST', 2.5);
+    const at = (x: number, y: number, w: number, h: number) => ({ x, y, w, h });
+    const made: Item[] = [
+      { ...vectorItem('Self-test: outline', { paths: sq.paths, width: 20, height: 20 }), ...at(30, 30, 15, 15) },
+      { ...vectorItem('Self-test: fill', { paths: circle.paths, width: 20, height: 20 }), mode: 'fill', ...at(55, 30, 15, 15) },
+      imageItem('Self-test: dither', gradient, 15, 15, { mode: 'dither', ...at(30, 55, 15, 15) }),
+      imageItem('Self-test: greyscale', gradient, 15, 15, { mode: 'grey', ...at(55, 55, 15, 15) }),
+      { ...vectorItem('Self-test: label', { paths: label.paths, width: label.width, height: label.height }), ...at(30, 75, 40, (40 * label.height) / label.width) },
+    ];
+    addItems(made);
+    note('Added the self-test: engrave it on scrap and check the outline is closed, the circle is evenly filled and the two gradients run from dark to light.');
+  };
+
   // ---------------------------------------------------------------- editing
 
   const removeSelected = () => {
@@ -465,7 +496,8 @@ export function App() {
       const outside = visible.filter((i) => !insideField(i));
       if (outside.length) throw new Error(`${outside.map((i) => i.name).join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the 100 × 100 mm field.`);
       const jobs = await buildJobs(visible);
-      setConfirm({ items: visible, jobs, seconds: jobs.reduce((s, j) => s + estimateSeconds(j), 0) });
+      const seconds = jobs.reduce((s, j) => s + estimateSeconds(j), 0);
+      setConfirm({ items: visible, jobs, seconds, warnings: jobWarnings(visible, seconds) });
     });
 
   const engrave = (jobs: JobSpec[]) =>
@@ -539,6 +571,7 @@ export function App() {
 
   const elapsed = runStarted ? ` · ${formatDuration((Date.now() - runStarted) / 1000)}` : '';
   const statusText = (() => {
+    if (reconnecting) return 'Connection lost — reconnecting to the LP2… (check the USB cable)';
     if (!device) return 'Not connected';
     if (run.phase === 'uploading') return `Sending ${run.name ?? ''} — ${run.size ? Math.round(((run.uploaded ?? 0) / run.size) * 100) : 0} %${elapsed}`;
     if (run.phase === 'engraving' || run.phase === 'paused')
@@ -586,6 +619,9 @@ export function App() {
           ↷ Redo
         </button>
         <button onClick={() => setDialog('settings')}>Device settings</button>
+        <button onClick={() => setDialog('about')} title="Version and updates">
+          About
+        </button>
       </header>
 
       <div className="main">
@@ -611,6 +647,9 @@ export function App() {
           </button>
           <button onClick={() => setDialog('grid')} title="A grid of power and depth settings to test a material">
             Test grid
+          </button>
+          <button onClick={addSelfTest} title="One of each kind of job, to check the laser and the app on scrap">
+            Self-test
           </button>
           <hr />
           <button onClick={newDesign}>New</button>
@@ -692,7 +731,7 @@ export function App() {
 
       <footer className="bar run">
         <div className="statusline">
-          <span className={`dot ${device ? (working ? 'busy' : 'ok') : ''}`} />
+          <span className={`dot ${reconnecting ? 'busy' : device ? (working ? 'busy' : 'ok') : ''}`} />
           <span className="status-text">{statusText}</span>
           <div className="progress">
             <div style={{ width: `${Math.round(progress * 100)}%` }} />
@@ -743,8 +782,9 @@ export function App() {
       </div>
       {logOpen && <LogDrawer log={log} onClose={() => setLogOpen(false)} />}
 
-      {confirm && <ConfirmDialog items={confirm.items} jobs={confirm.jobs.length} seconds={confirm.seconds} onCancel={() => setConfirm(null)} onGo={() => engrave(confirm.jobs)} />}
+      {confirm && <ConfirmDialog items={confirm.items} jobs={confirm.jobs.length} seconds={confirm.seconds} warnings={confirm.warnings} onCancel={() => setConfirm(null)} onGo={() => engrave(confirm.jobs)} />}
       {dialog === 'text' && <TextDialog onCancel={() => setDialog(null)} onAdd={addText} />}
+      {dialog === 'about' && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog === 'code' && <CodeDialog onCancel={() => setDialog(null)} onAdd={addCode} />}
       {dialog === 'grid' && <TestGridDialog onCancel={() => setDialog(null)} onCreate={addTestGrid} />}
       {dialog === 'material' && sel && <SaveMaterialDialog suggested="" onCancel={() => setDialog(null)} onSave={saveMaterial} />}

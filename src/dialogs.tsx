@@ -1,9 +1,10 @@
 /** The app's dialogs: engrave confirmation, text, device settings, material test, saving a material. */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { formatDuration } from '../shared/estimate.ts';
 import type { DeviceSettings } from '../shared/lp2.ts';
 import { BARCODE_FORMATS, type QrLevel } from './codes.ts';
 import { supported } from './hershey.ts';
+import { needsAttendance, type Warning } from './safety.ts';
 import type { JobSpec } from '../shared/types.ts';
 import { MODE_LABEL } from './Properties.tsx';
 import type { Item } from './model.ts';
@@ -22,7 +23,9 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 
 const round = (v: number) => Math.round(v * 10) / 10;
 
-export function ConfirmDialog({ items, jobs, seconds, onCancel, onGo }: { items: Item[]; jobs: number; seconds: number; onCancel: () => void; onGo: () => void }) {
+export function ConfirmDialog({ items, jobs, seconds, warnings, onCancel, onGo }: { items: Item[]; jobs: number; seconds: number; warnings: Warning[]; onCancel: () => void; onGo: () => void }) {
+  const mustAttend = needsAttendance(warnings);
+  const [attending, setAttending] = useState(false);
   return (
     <Modal title={`Engrave ${items.length === 1 ? 'this' : `these ${items.length} items`}?`} onClose={onCancel}>
       <div className="table-scroll">
@@ -49,10 +52,20 @@ export function ConfirmDialog({ items, jobs, seconds, onCancel, onGo }: { items:
       <p className="estimate">
         Estimated time: <strong>about {formatDuration(seconds)}</strong> <span className="hint">(a rough guide; material and settings change it)</span>
       </p>
+      {warnings.map((w, i) => (
+        <p key={i} className={w.level === 'danger' ? 'danger-note' : 'warn'}>
+          ⚠ {w.text}
+        </p>
+      ))}
       <p className="warn">The laser will fire. Wear eye protection and keep the work area clear.</p>
+      {mustAttend && (
+        <label className="check">
+          <input type="checkbox" checked={attending} onChange={(e) => setAttending(e.target.checked)} /> I'll stay with the laser while it runs
+        </label>
+      )}
       <div className="buttons">
         <button onClick={onCancel}>Cancel</button>
-        <button className="primary" autoFocus onClick={onGo}>
+        <button className="primary" autoFocus disabled={mustAttend && !attending} onClick={onGo}>
           Engrave
         </button>
       </div>
@@ -347,6 +360,57 @@ export function SaveMaterialDialog({ suggested, onCancel, onSave }: { suggested:
         <button onClick={onCancel}>Cancel</button>
         <button className="primary" disabled={!name.trim()} onClick={() => onSave(name.trim())}>
           Save
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+export function AboutDialog({ onClose }: { onClose: () => void }) {
+  const [info, setInfo] = useState<{ version: string; electron: string; data: string } | null>(null);
+  const [update, setUpdate] = useState<string | null>(null);
+  const [link, setLink] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    window.laser.appInfo().then(setInfo).catch(() => undefined);
+  }, []);
+  const check = async () => {
+    setChecking(true);
+    try {
+      const u = await window.laser.checkUpdate();
+      setLink(u.newer ? u.url : null);
+      setUpdate(u.note ?? (u.newer ? `Version ${u.latest} is available.` : `You have the latest version (${u.current}).`));
+    } catch (e) {
+      setUpdate(`Couldn't check: ${(e as Error).message}`);
+    } finally {
+      setChecking(false);
+    }
+  };
+  return (
+    <Modal title="Light Runner" onClose={onClose}>
+      <div className="about">
+        <img src="./icon.png" alt="" width={72} height={72} />
+        <div>
+          <div>Version {info?.version ?? '…'} · by RG Studios</div>
+          <div className="hint">Design and engrave on the LaserPecker LP2, without LaserPecker Design Space.</div>
+          <div className="hint">Your designs and settings are kept in {info?.data ?? '…'}</div>
+        </div>
+      </div>
+      <div className="row">
+        <button onClick={check} disabled={checking}>
+          {checking ? 'Checking…' : 'Check for updates'}
+        </button>
+        {link && (
+          <button className="primary" onClick={() => window.laser.openUrl(link)}>
+            Get it
+          </button>
+        )}
+      </div>
+      {update && <p className="hint">{update}</p>}
+      <p className="hint">Open-source parts: React, serialport, pdf.js, qrcode-generator, JsBarcode, the Hershey fonts (Dr. A. V. Hershey, U.S. National Bureau of Standards; data format by James Hurt) and Electron. See THIRD_PARTY_NOTICES.md.</p>
+      <div className="buttons">
+        <button className="primary" onClick={onClose}>
+          Close
         </button>
       </div>
     </Modal>

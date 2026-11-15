@@ -37,7 +37,7 @@ export interface PreviewSpec {
 export type RunPhase = 'idle' | 'uploading' | 'engraving' | 'paused' | 'stopping' | 'previewing';
 
 export type LaserEvent =
-  | { type: 'connection'; connected: boolean; info?: DeviceInfo; error?: string }
+  | { type: 'connection'; connected: boolean; info?: DeviceInfo; error?: string; reconnecting?: boolean }
   | { type: 'status'; status: Status }
   | { type: 'run'; phase: RunPhase; job?: number; jobs?: number; name?: string; uploaded?: number; size?: number }
   | { type: 'log'; level: 'info' | 'error'; message: string };
@@ -61,6 +61,9 @@ export interface LaserApi {
   /** The design in progress, kept between runs. */
   saveDraft(json: string): Promise<void>;
   loadDraft(): Promise<string | null>;
+  appInfo(): Promise<{ version: string; electron: string; data: string }>;
+  checkUpdate(): Promise<{ current: string; latest: string | null; url: string | null; newer: boolean; note?: string }>;
+  openUrl(url: string): Promise<void>;
   ports(): Promise<PortInfo[]>;
   connect(path: string): Promise<DeviceInfo>;
   disconnect(): Promise<void>;

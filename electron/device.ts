@@ -58,6 +58,13 @@ export class Laser extends EventEmitter {
 
   async connect(path: string): Promise<DeviceInfo> {
     await this.disconnect();
+    const info = await this.open(path);
+    this.wantConnected = true;
+    this.lastPath = path;
+    return info;
+  }
+
+  private async open(path: string): Promise<DeviceInfo> {
     const { SerialPort } = await import('serialport');
     const port = new SerialPort({ path, baudRate: lp2.BAUD, dataBits: 8, parity: 'none', stopBits: 1, autoOpen: false });
     await new Promise<void>((resolve, reject) => port.open((e) => (e ? reject(new Error(`Couldn't open ${path}: ${e.message}. Is LaserPecker Design Space using it?`)) : resolve())));
@@ -75,21 +82,61 @@ export class Laser extends EventEmitter {
       const files = lp2.parseFileList(await this.ask(lp2.query(lp2.QUERY.files), (p) => p[0] === 0x00 && p.length > 100, 3000));
       this.info = { path, firmware, deviceId: idReply ? lp2.hex(idReply.slice(4, 7), '').toUpperCase() : null, storedFiles: files.length };
     } catch (e) {
-      await this.disconnect();
+      const keep = this.wantConnected;
+      this.wantConnected = false;
+      if (port.isOpen) await new Promise<void>((r) => port.close(() => r()));
+      this.port = null;
+      this.wantConnected = keep;
       throw new Error(`The device on ${path} didn't answer like an LP2. ${(e as Error).message}`);
     }
     this.emitEvent({ type: 'connection', connected: true, info: this.info });
     this.log(`Connected to LP2${this.info.deviceId ? `-${this.info.deviceId}` : ''} on ${path}, firmware ${this.info.firmware ?? 'unknown'}.`);
     this.startPolling();
+    // If the laser is already in the middle of a job (we were restarted or the cable dropped),
+    // follow it so it can be watched, paused or stopped.
+    const s = await this.status().catch(() => null);
+    if (s && (s.state === 'engraving' || s.state === 'resumed' || s.state === 'paused') && this.phase === 'idle') {
+      this.log(`The LP2 is in the middle of a job (${s.progress} %). You can pause or stop it here.`);
+      this.followJob().catch(() => undefined);
+    }
     return this.info;
   }
 
+  /** Watches a job this app didn't start (or lost track of) until the laser finishes it. */
+  private async followJob() {
+    this.setPhase('engraving', { name: 'the running job' });
+    try {
+      for (;;) {
+        await sleep(POLL_MS);
+        if (!this.connected && !(await this.waitForConnection(120_000))) return;
+        const s = await this.status().catch(() => null);
+        if (!s) continue;
+        if (s.state === 'paused' && this.phase !== 'paused') this.setPhase('paused', { name: 'the running job' });
+        if ((s.state === 'engraving' || s.state === 'resumed') && this.phase === 'paused') this.setPhase('engraving', { name: 'the running job' });
+        if (s.state === 'finished' || s.state === 'done' || s.state === 'idle') {
+          this.log('The running job finished.');
+          await this.idle().catch(() => undefined);
+          return;
+        }
+      }
+    } finally {
+      this.setPhase('idle');
+    }
+  }
+
+  /** Closes the port on purpose (no reconnecting). */
   async disconnect() {
+    this.wantConnected = false;
+    this.stopReconnecting();
     this.stopPolling();
     const port = this.port;
     if (port?.isOpen) await new Promise<void>((r) => port.close(() => r())); // 'close' tells the window
     this.port = null;
   }
+
+  private wantConnected = false;
+  private lastPath: string | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   private onClosed() {
     this.stopPolling();
@@ -98,9 +145,54 @@ export class Laser extends EventEmitter {
       w.reject(new Error('The serial port closed.'));
     }
     this.port = null;
-    this.info = null;
-    this.setPhase('idle');
-    this.emitEvent({ type: 'connection', connected: false });
+    const lost = this.wantConnected;
+    if (!lost) {
+      this.info = null;
+      this.setPhase('idle');
+    }
+    this.emitEvent({ type: 'connection', connected: false, reconnecting: lost });
+    if (lost) {
+      this.log('Lost the connection to the LP2. Trying to reconnect… (check the USB cable)', 'error');
+      this.startReconnecting();
+    }
+  }
+
+  /** After an unplanned disconnect, keeps trying the same port every 2 seconds. */
+  private startReconnecting() {
+    this.stopReconnecting();
+    const path = this.lastPath;
+    if (!path) return;
+    const attempt = async () => {
+      if (!this.wantConnected || this.connected) return;
+      try {
+        const ports = await this.ports();
+        if (ports.some((p) => p.path === path)) {
+          await this.open(path);
+          this.log('Reconnected to the LP2.');
+          return;
+        }
+      } catch {
+        // not back yet
+      }
+      if (this.wantConnected) this.reconnectTimer = setTimeout(attempt, 2000);
+    };
+    this.reconnectTimer = setTimeout(attempt, 1500);
+  }
+
+  private stopReconnecting() {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  /** Waits for the connection to come back (after a cable drop) before giving up. */
+  private async waitForConnection(ms: number): Promise<boolean> {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (this.connected && this.info) return true;
+      if (!this.wantConnected) return false;
+      await sleep(500);
+    }
+    return false;
   }
 
   private onData(chunk: Buffer) {
@@ -217,9 +309,12 @@ export class Laser extends EventEmitter {
     this.log(`Engraving ${job.name}: power ${job.power} %, depth ${job.depth}, ${job.passes} pass${job.passes === 1 ? '' : 'es'}.`);
 
     // Wait until the laser says it's done (the poller keeps the UI updated meanwhile).
+    // The LP2 keeps engraving from its own memory if the cable drops, so wait for it to come back.
     for (;;) {
       await sleep(POLL_MS);
-      if (!this.connected) throw new Error('The laser disconnected during the job.');
+      if (!this.connected && !(await this.waitForConnection(120_000))) {
+        throw new Error('The laser was disconnected for over 2 minutes. It may still be engraving: reconnect to check.');
+      }
       const s = await this.status().catch(() => null);
       if (!s) continue;
       if (s.state === 'paused' && this.phase !== 'paused') this.setPhase('paused', where);
