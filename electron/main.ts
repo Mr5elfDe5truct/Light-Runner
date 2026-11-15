@@ -45,6 +45,9 @@ handle('laser:resume', () => laser.resume());
 handle('laser:stop', () => laser.stop());
 handle('laser:preview', (spec: PreviewSpec) => laser.preview(spec));
 handle('laser:stop-preview', () => laser.stopPreview());
+handle('laser:home', (how?: 'origin' | 'zero' | 'cycle') => laser.home(how ?? 'origin'));
+handle('laser:fire', (spec: import('../shared/grbl.ts').FireSpec) => laser.fire(spec));
+handle('laser:stop-fire', () => laser.stopFire());
 handle('laser:materials', () => loadMaterials());
 
 // ---------------------------------------------------------------- about and updates

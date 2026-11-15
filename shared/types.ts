@@ -40,7 +40,7 @@ export interface PreviewSpec {
   brightness: number;
 }
 
-export type RunPhase = 'idle' | 'uploading' | 'engraving' | 'paused' | 'stopping' | 'previewing';
+export type RunPhase = 'idle' | 'uploading' | 'engraving' | 'paused' | 'stopping' | 'previewing' | 'homing' | 'firing';
 
 export type LaserEvent =
   | { type: 'connection'; connected: boolean; info?: DeviceInfo; error?: string; reconnecting?: boolean }
@@ -54,12 +54,16 @@ export interface MaterialPreset {
   power: number;
   depth: number;
   passes: number;
+  speed?: number; // mm/min, G-code lasers
 }
 
 export interface Material {
   id: string;
   name: string;
   presets: MaterialPreset[];
+  machine?: 'lp2' | 'grbl'; // which kind of laser it's for (LDS presets are LP2)
+  starter?: boolean; // built-in starting point
+  watts?: number;
 }
 
 export interface LibraryEntry {
@@ -109,6 +113,9 @@ export interface LaserApi {
   stop(): Promise<void>;
   preview(spec: PreviewSpec): Promise<void>;
   stopPreview(): Promise<void>;
+  home(how?: 'origin' | 'zero' | 'cycle'): Promise<void>;
+  fire(spec: import('./grbl.ts').FireSpec): Promise<void>;
+  stopFire(): Promise<void>;
   applySettings(settings: DeviceSettings): Promise<void>;
   loadSettings(): Promise<DeviceSettings>;
   onEvent(listener: (event: LaserEvent) => void): () => void;

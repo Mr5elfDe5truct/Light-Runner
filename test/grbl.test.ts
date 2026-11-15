@@ -1,7 +1,7 @@
 // GRBL G-code generation, reply parsing, and streaming against a simulated controller.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_PROFILE, frameGcode, gcodeFor, linesToSend, parseGrblSettings, parseGrblStatus, profileFromSettings, programLines, RX_BUFFER } from '../shared/grbl.ts';
+import { DEFAULT_PROFILE, FIRE_LIMIT_S, fireGcode, frameGcode, gcodeFor, linesToSend, parseGrblSettings, parseGrblStatus, profileFromSettings, programLines, RX_BUFFER } from '../shared/grbl.ts';
 
 const p = { ...DEFAULT_PROFILE, bedW: 400, bedH: 400, maxS: 1000, originBottomLeft: true };
 
@@ -60,6 +60,19 @@ test('status and settings replies are read', () => {
   assert.equal(parseGrblStatus('ok'), null);
   const s = parseGrblSettings(['$30=1000', '$32=1', '$130=410.000', '$131=400.000', 'ok']);
   assert.deepEqual(profileFromSettings(s), { bedW: 410, bedH: 400, maxS: 1000, originBottomLeft: true, laserMode: true });
+});
+
+test('test fire: beam is one timed burst, strobe repeats, both end with the laser off', () => {
+  const beam = programLines(fireGcode({ power: 2, mode: 'beam', seconds: 1.5 }, p));
+  assert.deepEqual(beam, ['G21', 'G90', 'M5 S0', 'G1 F1000', 'M3 S20', 'G4 P1.5', 'M5 S0', 'G0']);
+  const strobe = programLines(fireGcode({ power: 5, mode: 'strobe', seconds: 2, onMs: 100, offMs: 400 }, p));
+  assert.equal(strobe.filter((l) => l.startsWith('M3')).length, 4);
+  assert.ok(strobe.includes('G4 P0.1') && strobe.includes('G4 P0.4'));
+  assert.equal(strobe.at(-2), 'G4 P0.4');
+  assert.equal(strobe.at(-3), 'M5 S0');
+  // Never longer than the limit, never zero power.
+  const capped = programLines(fireGcode({ power: 0, mode: 'beam', seconds: 999 }, p));
+  assert.ok(capped.includes(`G4 P${FIRE_LIMIT_S}`) && capped.includes('M3 S1'));
 });
 
 test('the frame goes round the box with the laser off', () => {

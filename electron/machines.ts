@@ -1,5 +1,6 @@
 /** Picks the right driver for the laser that's plugged in: LaserPecker LP2, or a GRBL laser. */
 import { EventEmitter } from 'node:events';
+import type { FireSpec } from '../shared/grbl.ts';
 import type { DeviceSettings } from '../shared/lp2.ts';
 import type { DeviceInfo, JobSpec, MachineKind, PreviewSpec } from '../shared/types.ts';
 import { Laser } from './device.ts';
@@ -69,6 +70,19 @@ export class Machines extends EventEmitter {
   }
   stopPreview() {
     return this.current.stopPreview();
+  }
+  private grblOnly(what: string): GrblLaser {
+    if (this.current !== this.grbl || !this.grbl.connected) throw new Error(`${what} is for G-code lasers; the LP2 has no moving head or test-fire command.`);
+    return this.grbl;
+  }
+  home(how: 'origin' | 'zero' | 'cycle' = 'origin') {
+    return this.grblOnly('Homing').home(how);
+  }
+  fire(spec: FireSpec) {
+    return this.grblOnly('Test fire').fire(spec);
+  }
+  stopFire() {
+    return this.current === this.grbl ? this.grbl.stopFire() : Promise.resolve();
   }
   applySettings(s: DeviceSettings) {
     return this.current === this.lp2 ? this.lp2.applySettings(s) : this.grbl.applySettings();

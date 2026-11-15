@@ -172,6 +172,37 @@ export function profileFromSettings(s: Record<number, number>, fallback = DEFAUL
   };
 }
 
+export interface FireSpec {
+  power: number; // %
+  mode: 'beam' | 'strobe';
+  seconds: number; // total time; the program turns the laser off by itself at the end
+  onMs?: number; // strobe
+  offMs?: number;
+}
+
+export const FIRE_LIMIT_S = 30;
+
+/**
+ * A test fire as a self-contained program: GRBL times it with dwells (G4) and ends with the
+ * laser off, so it stops on its own even if the app or the cable goes away. In laser mode the
+ * beam is only on in G1 (feed) mode, so G1 is set without moving.
+ */
+export function fireGcode(f: FireSpec, p: MachineProfile): string {
+  const s = Math.max(1, sValue(p, f.power));
+  const total = Math.max(0.05, Math.min(FIRE_LIMIT_S, f.seconds));
+  const out = ['G21', 'G90', 'M5 S0', 'G1 F1000'];
+  if (f.mode === 'beam') {
+    out.push(`M3 S${s}`, `G4 P${n(total)}`, 'M5 S0');
+  } else {
+    const on = Math.max(10, f.onMs ?? 50) / 1000;
+    const off = Math.max(10, f.offMs ?? 450) / 1000;
+    const flashes = Math.max(1, Math.floor(total / (on + off)));
+    for (let i = 0; i < flashes; i++) out.push(`M3 S${s}`, `G4 P${n(on)}`, 'M5 S0', `G4 P${n(off)}`);
+  }
+  out.push('G0');
+  return out.join('\n') + '\n';
+}
+
 /** How long a program takes: each move's length at its feed rate (G0 at `rapid` mm/min). */
 export function estimateProgramSeconds(gcode: string, rapid = 6000): number {
   let x = 0;

@@ -4,7 +4,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { appendFileSync } from 'node:fs';
-import { DEFAULT_PROFILE, frameGcode, GRBL_BAUD, linesToSend, parseGrblSettings, parseGrblStatus, profileFromSettings, programLines, type MachineProfile } from '../shared/grbl.ts';
+import { DEFAULT_PROFILE, fireGcode, frameGcode, type FireSpec, GRBL_BAUD, linesToSend, parseGrblSettings, parseGrblStatus, profileFromSettings, programLines, type MachineProfile } from '../shared/grbl.ts';
 import type { DeviceInfo, JobSpec, LaserEvent, PreviewSpec, RunPhase } from '../shared/types.ts';
 
 type SerialPortType = import('serialport').SerialPort;
@@ -49,6 +49,17 @@ export class GrblLaser extends EventEmitter {
     }
   }
 
+  private lastState = '';
+
+  /** GRBL refuses commands while in alarm; unlock first ($X). */
+  private async unlockIfAlarm() {
+    if (!this.lastState.startsWith('Alarm')) return;
+    this.inFlight = [];
+    await this.command('$X').catch(() => undefined);
+    this.lastState = 'Idle';
+    this.log('Unlocked the machine ($X).');
+  }
+
   private onLine(line: string) {
     this.trace('<', line);
     if (line.startsWith('<')) {
@@ -57,7 +68,8 @@ export class GrblLaser extends EventEmitter {
         const state = s.state.startsWith('Hold') ? 'paused' : s.state === 'Run' ? 'engraving' : s.state === 'Idle' ? 'idle' : 'unknown';
         const progress = this.total ? Math.round((this.acked / this.total) * 100) : 0;
         this.emitEvent({ type: 'status', status: { state, progress, power: 0, depth: 0, fileId: '' } });
-        if (s.state.startsWith('Alarm')) this.log('GRBL is in alarm. Check the machine, then reconnect (Light Runner sends $X to unlock).', 'error');
+        if (s.state.startsWith('Alarm') && !this.lastState.startsWith('Alarm')) this.log('The machine is in alarm (locked). Light Runner unlocks it ($X) before the next command.', 'error');
+        this.lastState = s.state;
       }
       // Status lines go to anyone waiting for one (the end of a job waits for "Idle").
       for (let i = 0; i < this.lineWaiters.length; i++) {
@@ -207,6 +219,7 @@ export class GrblLaser extends EventEmitter {
 
   async run(jobs: JobSpec[]) {
     if (!this.connected) throw new Error('Connect the laser first.');
+    await this.unlockIfAlarm();
     this.stopRequested = false;
     try {
       for (const [i, job] of jobs.entries()) {
@@ -251,6 +264,7 @@ export class GrblLaser extends EventEmitter {
   /** Traces the box with the laser off (spec in 0.1 mm, as for the LP2). */
   async preview(spec: PreviewSpec) {
     if (this.phase !== 'idle') throw new Error('The laser is busy.');
+    await this.unlockIfAlarm();
     this.stopRequested = false;
     this.setPhase('previewing');
     this.log('Framing with the laser off.');
@@ -264,6 +278,59 @@ export class GrblLaser extends EventEmitter {
 
   async stopPreview() {
     if (this.phase === 'previewing') await this.stop();
+  }
+
+  /**
+   * "origin": move to 0,0. "zero": make where the head is now 0,0 (work origin).
+   * "cycle": the homing cycle ($H), for machines with limit switches.
+   */
+  async home(how: 'origin' | 'zero' | 'cycle' = 'origin') {
+    if (this.phase !== 'idle') throw new Error('The laser is busy.');
+    await this.unlockIfAlarm();
+    this.setPhase('homing');
+    try {
+      this.inFlight = [];
+      if (how === 'zero') {
+        await this.command('G10 L20 P1 X0 Y0');
+        this.log('This spot is now 0,0 for your jobs.');
+      } else if (how === 'origin') {
+        this.log('Going to 0,0…');
+        await this.stream(['G90', 'M5 S0', 'G0 X0 Y0'].join('\n'));
+        this.log('At 0,0.');
+      } else {
+        this.log('Homing (finding the limit switches)…');
+        const reply = await this.command('$H', 90_000);
+        if (reply.some((l) => /ALARM|error/i.test(l))) throw new Error(reply.join(' '));
+        this.log('Homed: the head is at 0,0.');
+      }
+    } catch (e) {
+      const msg = (e as Error).message;
+      await this.unlockIfAlarm().catch(() => undefined);
+      if (how === 'cycle' && /ALARM:9|ALARM:8/.test(msg)) throw new Error('Homing found no limit switch (ALARM:9). This machine may not have them: use "Go to 0,0" or "Set this spot as 0,0" instead. The machine has been unlocked.');
+      throw new Error(`That didn't finish: ${msg}`);
+    } finally {
+      this.setPhase('idle');
+    }
+  }
+
+  /** A timed test fire (beam or strobe); the program switches the laser off by itself at the end. */
+  async fire(spec: FireSpec) {
+    if (this.phase !== 'idle') throw new Error('The laser is busy.');
+    await this.unlockIfAlarm();
+    this.stopRequested = false;
+    this.setPhase('firing');
+    this.log(`Test fire: ${spec.mode}, ${spec.power} % for ${spec.seconds} s.`);
+    try {
+      await this.stream(fireGcode(spec, this.profile));
+      if (!this.stopRequested) this.log('Test fire finished; the laser is off.');
+    } finally {
+      this.setPhase('idle');
+    }
+  }
+
+  /** Stops a test fire at once (soft reset kills the beam). */
+  async stopFire() {
+    if (this.phase === 'firing') await this.stop();
   }
 
   async applySettings() {

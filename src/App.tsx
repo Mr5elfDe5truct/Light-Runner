@@ -23,6 +23,9 @@ import { Workspace } from './Workspace.tsx';
 import { CameraDialog } from './CameraDialog.tsx';
 import { HelpDialog, HistoryDialog, LibraryDialog, WelcomeDialog } from './panels.tsx';
 import { thumbnail } from './thumbnail.ts';
+import { FireDialog } from './FireDialog.tsx';
+import { DesignsPanel, MaterialsPanel } from './SidePanels.tsx';
+import { starterMaterials } from './starterMaterials.ts';
 import { buildGrblJobs } from './grblJobs.ts';
 import { DEFAULT_PROFILE, estimateProgramSeconds, type MachineProfile } from '../shared/grbl.ts';
 import { FIELD } from './model.ts';
@@ -39,7 +42,8 @@ interface RunState {
   size?: number;
 }
 type LogLine = { level: string; message: string; at: string };
-type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome';
+type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome' | 'fire';
+const WATTS_KEY = 'lightrunner.laserWatts';
 const WELCOME_KEY = 'lightrunner.welcomed';
 const MACHINE_KEY = 'lightrunner.machine';
 type Machine = { kind: 'lp2' | 'grbl'; bed: { w: number; h: number }; profile?: MachineProfile };
@@ -102,6 +106,10 @@ export function App() {
   const [myMaterials, setMyMaterials] = useState<Material[]>(loadMyMaterials);
   const [brightness, setBrightness] = useState(1);
   const [lockAspect, setLockAspect] = useState(true);
+  const [sideTab, setSideTab] = useState<'layers' | 'materials' | 'designs'>('layers');
+  const [watts, setWatts] = useState(() => Number(localStorage.getItem(WATTS_KEY)) || 10);
+  const [designsKey, setDesignsKey] = useState(0);
+  const [homeMenu, setHomeMenu] = useState(false);
   const [snap, setSnap] = useState(false);
   const [dialog, setDialog] = useState<DialogName>(null);
   const [pdf, setPdf] = useState<{ name: string; data: ArrayBuffer; pages: number } | null>(null);
@@ -135,7 +143,10 @@ export function App() {
   const note = (message: string, level = 'info') => setLog((l) => [...l.slice(-499), { level, message, at: new Date().toLocaleTimeString() }]);
   const fail = (e: unknown) => note((e as Error)?.message ?? String(e), 'error');
 
-  const materials = useMemo(() => [...myMaterials.map((m) => ({ ...m, name: `★ ${m.name}` })), ...ldsMaterials], [myMaterials, ldsMaterials]);
+  const allMaterials = useMemo(
+    () => [...myMaterials.map((m) => ({ ...m, machine: m.machine ?? 'lp2', name: `★ ${m.name}` })), ...ldsMaterials.map((m) => ({ ...m, machine: 'lp2' as const })), ...starterMaterials(watts)],
+    [myMaterials, ldsMaterials, watts],
+  );
 
   const refreshPorts = async () => {
     const list = await laser.ports();
@@ -466,7 +477,7 @@ export function App() {
   };
 
   const materialPatch = (item: Item, materialId: string): Partial<Item> | null => {
-    const m = materials.find((x) => x.id === materialId);
+    const m = allMaterials.find((x) => x.id === materialId);
     if (!m) return { material: undefined };
     const dpi = item.resolution === '2K' ? 508 : 254;
     const best = m.presets.filter((p) => p.mode === presetMode(item)).sort((a, b) => Math.abs(a.dpi - dpi) - Math.abs(b.dpi - dpi))[0];
@@ -474,7 +485,7 @@ export function App() {
       note(`${m.name} has no setting for ${MODE_LABEL[item.mode].toLowerCase()} jobs; ${item.name} is unchanged.`, 'error');
       return null;
     }
-    return { material: materialId, power: best.power, depth: Math.max(1, best.depth), passes: best.passes };
+    return { material: materialId, power: best.power, depth: Math.max(1, best.depth), passes: best.passes, ...(best.speed ? { speed: best.speed } : {}) };
   };
 
   const applyMaterial = (targets: Item[], materialId: string) => {
@@ -486,11 +497,11 @@ export function App() {
   const saveMaterial = (name: string) => {
     setDialog(null);
     if (!sel) return;
-    const preset = { mode: presetMode(sel), dpi: sel.resolution === '2K' ? 508 : 254, power: sel.power, depth: sel.depth, passes: sel.passes };
-    const existing = myMaterials.find((m) => m.name.toLowerCase() === name.toLowerCase());
+    const preset = { mode: presetMode(sel), dpi: sel.resolution === '2K' ? 508 : 254, power: sel.power, depth: sel.depth, passes: sel.passes, ...(isGrbl ? { speed: sel.speed ?? 1500 } : {}) };
+    const existing = myMaterials.find((m) => m.name.toLowerCase() === name.toLowerCase() && (m.machine ?? 'lp2') === machine.kind);
     const next = existing
       ? myMaterials.map((m) => (m === existing ? { ...m, presets: [...m.presets.filter((p) => !(p.mode === preset.mode && p.dpi === preset.dpi)), preset] } : m))
-      : [...myMaterials, { id: `my-${newId()}`, name, presets: [preset] }];
+      : [...myMaterials, { id: `my-${newId()}`, name, machine: machine.kind, ...(isGrbl ? { watts } : {}), presets: [preset] }];
     setMyMaterials(next);
     localStorage.setItem(MY_MATERIALS_KEY, JSON.stringify(next));
     update(sel.id, { material: (existing ?? next[next.length - 1]).id });
@@ -498,6 +509,27 @@ export function App() {
   };
 
   // ---------------------------------------------------------------- projects
+
+  const saveDesign = async (name: string, id?: string) => {
+    const thumb = await thumbnail(items, previews);
+    const saved = await laser.library.save(name, { app: 'Light Runner', version: 3, items }, thumb, id);
+    setLibraryId(saved);
+    setDesignsKey((k) => k + 1);
+    note(`Saved "${name}" to My designs.`);
+  };
+
+  const openDesign = async (id: string, name: string) => {
+    try {
+      const design = (await laser.library.load(id)) as { items: Item[] };
+      history.commit(design.items.map(normalizeItem));
+      setSelection([]);
+      setLibraryId(id);
+      setDialog(null);
+      note(`Opened "${name}".`);
+    } catch (e) {
+      fail(e);
+    }
+  };
 
   const saveProject = () => download('design.lightrunner.json', JSON.stringify({ app: 'Light Runner', version: 3, items }, null, 1), 'application/json');
 
@@ -821,10 +853,38 @@ export function App() {
         </section>
 
         <aside className="side">
-          <h3>
-            Layers · engrave order
-            {items.length > 0 && <small className="count">{items.length}</small>}
-          </h3>
+          <div className="side-tabs" role="tablist">
+            {(['layers', 'materials', 'designs'] as const).map((t) => (
+              <button key={t} role="tab" aria-selected={sideTab === t} className={sideTab === t ? 'on' : ''} onClick={() => setSideTab(t)}>
+                {t === 'layers' ? `Layers${items.length ? ` (${items.length})` : ''}` : t === 'materials' ? 'Materials' : 'Designs'}
+              </button>
+            ))}
+          </div>
+          {sideTab === 'materials' && (
+            <MaterialsPanel
+              machine={machine.kind}
+              materials={allMaterials}
+              watts={watts}
+              onWatts={(w) => {
+                setWatts(w);
+                localStorage.setItem(WATTS_KEY, String(w));
+              }}
+              selectedCount={selItems.length}
+              onApply={(id) => applyMaterial(selItems, id)}
+              onSaveFromSelection={() => setDialog('material')}
+              onDelete={(id) => {
+                const next = myMaterials.filter((m) => m.id !== id);
+                setMyMaterials(next);
+                localStorage.setItem(MY_MATERIALS_KEY, JSON.stringify(next));
+              }}
+              onExport={() => download('my-materials.lightrunner-materials.json', JSON.stringify({ app: 'Light Runner materials', version: 1, materials: myMaterials }, null, 1), 'application/json')}
+              onImport={() => materialsInput.current?.click()}
+            />
+          )}
+          {sideTab === 'designs' && <DesignsPanel currentId={libraryId} onOpen={openDesign} onSave={saveDesign} refreshKey={designsKey} />}
+          {sideTab === 'layers' && (
+          <>
+          <h3>Engrave order</h3>
           <ul className="layers">
             {items.map((i) => (
               <li
@@ -847,7 +907,7 @@ export function App() {
             <Properties
               machine={machine.kind}
               item={sel}
-              materials={materials}
+              materials={allMaterials.filter((m) => m.machine === machine.kind)}
               lockAspect={lockAspect}
               onLockAspect={setLockAspect}
               onChange={(patch, key) => update(sel.id, patch, key)}
@@ -871,7 +931,7 @@ export function App() {
             <MultiProperties
               machine={machine.kind}
               items={selItems}
-              materials={materials}
+              materials={allMaterials.filter((m) => m.machine === machine.kind)}
               onChangeAll={(patch, key) => updateMany(selected, patch, key)}
               onAlign={(how) => {
                 const pos = alignGroupToField(selItems, how);
@@ -891,6 +951,8 @@ export function App() {
               onDuplicate={() => duplicate()}
               onDelete={removeSelected}
             />
+          )}
+          </>
           )}
         </aside>
       </div>
@@ -913,6 +975,25 @@ export function App() {
           </button>
         ) : (
           <>
+            {isGrbl && (
+              <>
+                <div className="menu-wrap up">
+                  <button onClick={() => setHomeMenu(!homeMenu)} disabled={!device || busy || working} title="Go to 0,0, set 0,0 here, or run the homing cycle">
+                    Home ▾
+                  </button>
+                  {homeMenu && (
+                    <div className="menu" onMouseLeave={() => setHomeMenu(false)}>
+                      <button onClick={() => (setHomeMenu(false), act(() => laser.home('origin')))}>Go to 0,0</button>
+                      <button onClick={() => (setHomeMenu(false), act(() => laser.home('zero')))}>Set this spot as 0,0</button>
+                      <button onClick={() => (setHomeMenu(false), act(() => laser.home('cycle')))}>Homing cycle ($H, needs limit switches)</button>
+                    </div>
+                  )}
+                </div>
+                <button className="danger" onClick={() => setDialog('fire')} disabled={!device || busy || working} title="Test fire the laser (beam or strobe)">
+                  Fire laser…
+                </button>
+              </>
+            )}
             <button onClick={() => startPreview(false)} disabled={!device || busy || working || !previewTargets.length} title="Trace the frame of what will be engraved">
               Preview {selItems.some((i) => i.visible) ? 'selected' : 'all'}
             </button>
@@ -994,28 +1075,20 @@ export function App() {
           }}
         />
       )}
+      {dialog === 'fire' && (
+        <FireDialog
+          firing={run.phase === 'firing'}
+          onStart={(spec) => laser.fire(spec)}
+          onStop={() => laser.stopFire()}
+          onClose={() => setDialog(null)}
+        />
+      )}
       {dialog === 'library' && (
         <LibraryDialog
           currentId={libraryId}
           onClose={() => setDialog(null)}
-          onSave={async (name, id) => {
-            const thumb = await thumbnail(items, previews);
-            const saved = await laser.library.save(name, { app: 'Light Runner', version: 3, items }, thumb, id);
-            setLibraryId(saved);
-            note(`Saved "${name}" to My designs.`);
-          }}
-          onOpen={async (id, name) => {
-            try {
-              const design = (await laser.library.load(id)) as { items: Item[] };
-              history.commit(design.items.map(normalizeItem));
-              setSelection([]);
-              setLibraryId(id);
-              setDialog(null);
-              note(`Opened "${name}".`);
-            } catch (e) {
-              fail(e);
-            }
-          }}
+          onSave={saveDesign}
+          onOpen={openDesign}
           onExportMaterials={() => download('my-materials.lightrunner-materials.json', JSON.stringify({ app: 'Light Runner materials', version: 1, materials: myMaterials }, null, 1), 'application/json')}
           onImportMaterials={() => materialsInput.current?.click()}
         />
