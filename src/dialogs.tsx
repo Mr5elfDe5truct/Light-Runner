@@ -30,7 +30,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 
 const round = (v: number) => Math.round(v * 10) / 10;
 
-export function ConfirmDialog({ items, jobs, seconds, warnings, onCancel, onGo }: { items: Item[]; jobs: number; seconds: number; warnings: Warning[]; onCancel: () => void; onGo: () => void }) {
+export function ConfirmDialog({ items, jobs, seconds, warnings, machine = 'lp2', onCancel, onGo }: { items: Item[]; jobs: number; seconds: number; warnings: Warning[]; machine?: 'lp2' | 'grbl'; onCancel: () => void; onGo: () => void }) {
   const mustAttend = needsAttendance(warnings);
   const [attending, setAttending] = useState(false);
   return (
@@ -46,7 +46,7 @@ export function ConfirmDialog({ items, jobs, seconds, warnings, onCancel, onGo }
                   {round(i.w)} × {round(i.h)} mm
                 </td>
                 <td>power {i.power} %</td>
-                <td>depth {i.depth}</td>
+                <td>{machine === 'grbl' ? `${i.speed ?? 1500} mm/min` : `depth ${i.depth}`}</td>
                 <td>
                   {i.passes} pass{i.passes === 1 ? '' : 'es'}
                 </td>

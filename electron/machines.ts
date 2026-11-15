@@ -23,25 +23,28 @@ export class Machines extends EventEmitter {
     return this.lp2.ports();
   }
 
-  /** "auto" tries the LP2's handshake first, then GRBL. */
+  /**
+   * "auto" asks GRBL first ("$I" at 115200: harmless to an LP2, which only acts on checksummed
+   * frames), then tries the LP2's handshake.
+   */
   async connect(path: string, kind: MachineKind | 'auto' = 'auto'): Promise<DeviceInfo> {
     await this.disconnect();
-    if (kind === 'lp2' || kind === 'auto') {
+    if (kind === 'grbl' || kind === 'auto') {
       try {
-        const info = await this.lp2.connect(path);
-        this.current = this.lp2;
+        const info = await this.grbl.connect(path);
+        this.current = this.grbl;
         return info;
       } catch (e) {
-        await this.lp2.disconnect().catch(() => undefined);
-        if (kind === 'lp2') throw e;
+        await this.grbl.disconnect().catch(() => undefined);
+        if (kind === 'grbl') throw e;
       }
     }
     try {
-      const info = await this.grbl.connect(path);
-      this.current = this.grbl;
+      const info = await this.lp2.connect(path);
+      this.current = this.lp2;
       return info;
     } catch (e) {
-      throw new Error(kind === 'auto' ? `Neither an LP2 nor a GRBL laser answered on ${path}. Is another program using it?` : (e as Error).message);
+      throw new Error(kind === 'auto' ? `Neither a GRBL laser nor an LP2 answered on ${path}. Is another program using it?` : (e as Error).message);
     }
   }
 

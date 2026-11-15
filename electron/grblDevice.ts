@@ -45,6 +45,13 @@ export class GrblLaser extends EventEmitter {
         this.emitEvent({ type: 'status', status: { state, progress, power: 0, depth: 0, fileId: '' } });
         if (s.state.startsWith('Alarm')) this.log('GRBL is in alarm. Check the machine, then reconnect (Light Runner sends $X to unlock).', 'error');
       }
+      // Status lines go to anyone waiting for one (the end of a job waits for "Idle").
+      for (let i = 0; i < this.lineWaiters.length; i++) {
+        if (this.lineWaiters[i](line)) {
+          this.lineWaiters.splice(i, 1);
+          break;
+        }
+      }
       return;
     }
     if (line === 'ok' || line.startsWith('error')) {
@@ -109,16 +116,22 @@ export class GrblLaser extends EventEmitter {
     parser.on('data', (l: string) => this.onLine(l.trim()));
     port.on('close', () => this.onClosed());
     try {
-      // Many boards reset when the port opens and print "Grbl 1.1h ['$' for help]".
-      const banner = this.waitLine((l) => /^Grbl /i.test(l), 2500).catch(() => null);
+      // Ask for the build info ($I: "[VER:1.1f.20220618:]"). Boards that reset when the port opens
+      // (Arduino-style) need a moment first, so try twice. No reset is sent: it would stop a job.
       await sleep(300);
       await this.write('\r\n\r\n');
-      let greeting = await banner;
-      if (!greeting) {
-        await this.write(Buffer.from([0x18])); // soft reset prints the banner again
-        greeting = await this.waitLine((l) => /^Grbl /i.test(l), 2500);
+      await sleep(400);
+      this.inFlight = [];
+      let info = await this.command('$I', 1500).catch(() => null);
+      if (!info?.some((l) => l.startsWith('[VER:'))) {
+        await sleep(1500);
+        this.inFlight = [];
+        info = await this.command('$I', 2000);
       }
-      await sleep(200);
+      const ver = /\[VER:([^:\]]+)/.exec(info.join('\n'))?.[1];
+      if (!ver) throw new Error('It answered, but not like GRBL.');
+      const greeting = `GRBL ${ver.split('.').slice(0, 2).join('.')}`;
+      await sleep(100);
       this.inFlight = [];
       const settings = parseGrblSettings(await this.command('$$'));
       const prof = profileFromSettings(settings);
@@ -169,7 +182,8 @@ export class GrblLaser extends EventEmitter {
       onProgress?.(this.acked, lines.length);
       await sleep(k ? 2 : 10);
     }
-    // Wait for the motion to finish.
+    // Wait for the motion to finish (give the planner a moment to start moving first).
+    await sleep(400);
     for (;;) {
       const s = await this.waitLine((l) => l.startsWith('<'), 3000).catch(() => '');
       if (/^<Idle/.test(s) || this.stopRequested || !this.connected) return;
@@ -224,8 +238,10 @@ export class GrblLaser extends EventEmitter {
     if (this.phase !== 'idle') throw new Error('The laser is busy.');
     this.stopRequested = false;
     this.setPhase('previewing');
+    this.log('Framing with the laser off.');
     try {
       await this.stream(frameGcode({ x: spec.x / 10, y: spec.y / 10, w: spec.width / 10, h: spec.height / 10 }, this.profile));
+      if (!this.stopRequested) this.log('Frame done.');
     } finally {
       this.setPhase('idle');
     }

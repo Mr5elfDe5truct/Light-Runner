@@ -678,7 +678,7 @@ export function App() {
     if (run.phase === 'uploading') return `Sending ${run.name ?? ''} — ${run.size ? Math.round(((run.uploaded ?? 0) / run.size) * 100) : 0} %${elapsed}`;
     if (run.phase === 'engraving' || run.phase === 'paused')
       return `${run.phase === 'paused' ? 'Paused' : 'Engraving'} ${run.name ?? ''} — ${status?.progress ?? 0} %${run.jobs && run.jobs > 1 ? ` · job ${run.job} of ${run.jobs}` : ''}${elapsed}`;
-    if (run.phase === 'previewing') return 'Previewing — the LP2 is tracing the frame';
+    if (run.phase === 'previewing') return isGrbl ? 'Framing — the head traces the outline with the laser off' : 'Previewing — the LP2 is tracing the frame';
     if (run.phase === 'stopping') return 'Stopping';
     return 'Ready';
   })();
@@ -908,7 +908,7 @@ export function App() {
           <input type="range" min="1" max="10" value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} />
         </label>
         {run.phase === 'previewing' ? (
-          <button onClick={() => act(() => laser.stopPreview())} disabled={busy}>
+          <button onClick={() => laser.stopPreview().catch(fail)}>
             Stop preview
           </button>
         ) : (
@@ -958,7 +958,7 @@ export function App() {
       </div>
       {logOpen && <LogDrawer log={log} onClose={() => setLogOpen(false)} />}
 
-      {confirm && <ConfirmDialog items={confirm.items} jobs={confirm.jobs.length} seconds={confirm.seconds} warnings={confirm.warnings} onCancel={() => setConfirm(null)} onGo={() => engrave(confirm.jobs)} />}
+      {confirm && <ConfirmDialog items={confirm.items} jobs={confirm.jobs.length} seconds={confirm.seconds} warnings={confirm.warnings} machine={machine.kind} onCancel={() => setConfirm(null)} onGo={() => engrave(confirm.jobs)} />}
       {dialog === 'text' && <TextDialog onCancel={() => setDialog(null)} onAdd={addText} />}
       {dialog === 'batch' && (
         <BatchDialog
