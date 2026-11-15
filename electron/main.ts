@@ -24,6 +24,8 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false },
   });
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  // While developing, show the window's warnings and errors in the terminal.
+  if (!app.isPackaged) win.webContents.on('console-message', (e) => e.level !== 'info' && e.level !== 'debug' && console.log(`[window ${e.level}] ${e.message}`));
   win.on('closed', () => (win = null));
 }
 
@@ -42,6 +44,10 @@ handle('laser:stop', () => laser.stop());
 handle('laser:preview', (spec: PreviewSpec) => laser.preview(spec));
 handle('laser:stop-preview', () => laser.stopPreview());
 handle('laser:materials', () => loadMaterials());
+
+const draftFile = () => path.join(app.getPath('userData'), 'draft.lightrunner.json');
+handle('app:save-draft', (json: string) => writeFile(draftFile(), json));
+handle('app:load-draft', () => readFile(draftFile(), 'utf8').catch(() => null));
 handle('laser:load-settings', async () => {
   try {
     return { ...DEFAULT_SETTINGS, ...JSON.parse(await readFile(settingsFile(), 'utf8')) } as DeviceSettings;

@@ -98,7 +98,8 @@ export function simplify(points: Point[], tol: number): Point[] {
 }
 
 /** Text drawn as a black-on-white image, so it engraves like a picture. */
-export function textImage(text: string, font = 'bold 160px "Segoe UI", sans-serif'): { src: string; aspect: number } {
+export function textImage(text: string, family = '"Segoe UI", sans-serif', bold = true, italic = false): { src: string; aspect: number } {
+  const font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}160px ${family}`;
   const lines = text.split('\n');
   const probe = document.createElement('canvas').getContext('2d')!;
   probe.font = font;

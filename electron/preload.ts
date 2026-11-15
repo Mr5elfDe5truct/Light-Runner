@@ -16,6 +16,8 @@ const api: LaserApi = {
   applySettings: call('laser:apply-settings') as LaserApi['applySettings'],
   loadSettings: call('laser:load-settings') as LaserApi['loadSettings'],
   materials: call('laser:materials') as LaserApi['materials'],
+  saveDraft: call('app:save-draft') as LaserApi['saveDraft'],
+  loadDraft: call('app:load-draft') as LaserApi['loadDraft'],
   onEvent(listener) {
     const fn = (_e: unknown, event: LaserEvent) => listener(event);
     ipcRenderer.on('laser:event', fn);

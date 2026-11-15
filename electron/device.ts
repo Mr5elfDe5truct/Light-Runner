@@ -87,8 +87,8 @@ export class Laser extends EventEmitter {
   async disconnect() {
     this.stopPolling();
     const port = this.port;
+    if (port?.isOpen) await new Promise<void>((r) => port.close(() => r())); // 'close' tells the window
     this.port = null;
-    if (port?.isOpen) await new Promise<void>((r) => port.close(() => r()));
   }
 
   private onClosed() {

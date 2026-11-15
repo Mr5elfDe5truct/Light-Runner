@@ -58,6 +58,9 @@ export interface Material {
 
 export interface LaserApi {
   materials(): Promise<Material[]>;
+  /** The design in progress, kept between runs. */
+  saveDraft(json: string): Promise<void>;
+  loadDraft(): Promise<string | null>;
   ports(): Promise<PortInfo[]>;
   connect(path: string): Promise<DeviceInfo>;
   disconnect(): Promise<void>;
