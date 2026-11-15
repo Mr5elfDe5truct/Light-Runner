@@ -1,0 +1,63 @@
+{
+  "name": "light-runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Design and engrave on the LaserPecker LP2 without LaserPecker Design Space.",
+  "type": "module",
+  "author": "RG Studios",
+  "license": "UNLICENSED",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && node scripts/build-desktop.mjs",
+    "start": "npm run build && electron .",
+    "test": "tsx --test test/*.test.ts",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "serialport": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6"
+  },
+  "build": {
+    "appId": "app.lightrunner.desktop",
+    "productName": "Light Runner",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "menuCategory": "RG Studios",
+      "shortcutName": "Light Runner",
+      "createDesktopShortcut": true,
+      "artifactName": "Light-Runner-Setup-${version}.${ext}"
+    },
+    "asarUnpack": [
+      "node_modules/@serialport/**"
+    ],
+    "npmRebuild": false,
+    "copyright": "Copyright © 2026 Ryan Gyles"
+  }
+}
