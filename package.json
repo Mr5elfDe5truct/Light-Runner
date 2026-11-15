@@ -1,6 +1,6 @@
 {
   "name": "light-runner",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Design and engrave on the LaserPecker LP2 without LaserPecker Design Space.",
   "type": "module",
@@ -14,6 +14,10 @@
     "dist": "npm run build && electron-builder --win"
   },
   "dependencies": {
+    "hershey": "^2.1.7",
+    "jsbarcode": "^3.12.3",
+    "pdfjs-dist": "^6.5.438",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "serialport": "^13.0.0"
@@ -40,7 +44,8 @@
     "files": [
       "dist/**",
       "dist-electron/**",
-      "package.json"
+      "package.json",
+      "THIRD_PARTY_NOTICES.md"
     ],
     "win": {
       "target": "nsis"

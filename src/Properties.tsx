@@ -186,6 +186,69 @@ export function Properties({ item, materials, lockAspect, onLockAspect, onChange
   );
 }
 
+interface MultiProps {
+  items: Item[];
+  materials: Material[];
+  onChangeAll: (patch: Partial<Item>, key?: string) => void;
+  onAlign: (how: Align) => void;
+  onMaterial: (id: string) => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}
+
+/** Editing several items at once: alignment as a group, and laser settings for all of them. */
+export function MultiProperties({ items, materials, onChangeAll, onAlign, onMaterial, onDuplicate, onDelete }: MultiProps) {
+  const first = items[0];
+  const same = <K extends keyof Item>(k: K) => items.every((i) => i[k] === first[k]);
+  return (
+    <div className="props">
+      <h3>{items.length} items selected</h3>
+      <p className="hint">Changes here apply to all of them. Drag any of them to move the group.</p>
+      <div className="row align">
+        {ALIGN.map((a) => (
+          <button key={a.how} className="small" title={`${a.title} (as a group)`} onClick={() => onAlign(a.how)}>
+            {a.label}
+          </button>
+        ))}
+      </div>
+      <h4>Laser</h4>
+      <label>
+        Material
+        <select value={same('material') ? (first.material ?? '') : '?'} onChange={(e) => onMaterial(e.target.value)}>
+          {!same('material') && <option value="?">Mixed</option>}
+          <option value="">Custom</option>
+          {materials.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <Slider label={`Power %${same('power') ? '' : ' (mixed)'}`} value={first.power} min={1} max={100} onChange={(v) => onChangeAll({ power: v, material: undefined }, 'power')} />
+      <Slider label={`Depth${same('depth') ? '' : ' (mixed)'}`} value={first.depth} min={1} max={100} onChange={(v) => onChangeAll({ depth: v, material: undefined }, 'depth')} />
+      <label>
+        Passes{same('passes') ? '' : ' (mixed)'}
+        <input type="number" min="1" max="50" value={first.passes} onChange={(e) => onChangeAll({ passes: Math.max(1, Math.min(50, Math.round(Number(e.target.value)) || 1)), material: undefined }, 'passes')} />
+      </label>
+      <label>
+        Resolution{same('resolution') ? '' : ' (mixed)'}
+        <select value={first.resolution} onChange={(e) => onChangeAll({ resolution: e.target.value as Resolution })}>
+          <option value="1K">1K (0.1 mm per dot)</option>
+          <option value="2K">2K (0.05 mm per dot)</option>
+        </select>
+      </label>
+      <div className="row wrap">
+        <button className="small" onClick={onDuplicate}>
+          Duplicate all
+        </button>
+        <button className="danger small" onClick={onDelete}>
+          Delete all
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Slider({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void }) {
   return (
     <label>

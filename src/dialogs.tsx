@@ -1,6 +1,9 @@
 /** The app's dialogs: engrave confirmation, text, device settings, material test, saving a material. */
 import { useState, type ReactNode } from 'react';
+import { formatDuration } from '../shared/estimate.ts';
 import type { DeviceSettings } from '../shared/lp2.ts';
+import { BARCODE_FORMATS, type QrLevel } from './codes.ts';
+import { supported } from './hershey.ts';
 import type { JobSpec } from '../shared/types.ts';
 import { MODE_LABEL } from './Properties.tsx';
 import type { Item } from './model.ts';
@@ -19,7 +22,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 
 const round = (v: number) => Math.round(v * 10) / 10;
 
-export function ConfirmDialog({ items, jobs, onCancel, onGo }: { items: Item[]; jobs: number; onCancel: () => void; onGo: () => void }) {
+export function ConfirmDialog({ items, jobs, seconds, onCancel, onGo }: { items: Item[]; jobs: number; seconds: number; onCancel: () => void; onGo: () => void }) {
   return (
     <Modal title={`Engrave ${items.length === 1 ? 'this' : `these ${items.length} items`}?`} onClose={onCancel}>
       <div className="table-scroll">
@@ -43,6 +46,9 @@ export function ConfirmDialog({ items, jobs, onCancel, onGo }: { items: Item[]; 
         </table>
       </div>
       {jobs !== items.length && <p className="hint">Outlines with the same settings go together, so this is {jobs} job{jobs === 1 ? '' : 's'} on the laser.</p>}
+      <p className="estimate">
+        Estimated time: <strong>about {formatDuration(seconds)}</strong> <span className="hint">(a rough guide; material and settings change it)</span>
+      </p>
       <p className="warn">The laser will fire. Wear eye protection and keep the work area clear.</p>
       <div className="buttons">
         <button onClick={onCancel}>Cancel</button>
@@ -56,43 +62,170 @@ export function ConfirmDialog({ items, jobs, onCancel, onGo }: { items: Item[]; 
 
 export const FONTS = ['"Segoe UI", sans-serif', 'Arial, sans-serif', 'Georgia, serif', '"Times New Roman", serif', '"Courier New", monospace', 'Impact, sans-serif', '"Comic Sans MS", cursive', '"Brush Script MT", cursive', 'Consolas, monospace', '"Segoe Script", cursive'];
 
-export function TextDialog({ onCancel, onAdd }: { onCancel: () => void; onAdd: (text: string, font: string, bold: boolean, italic: boolean) => void }) {
-  const [text, setText] = useState('');
-  const [font, setFont] = useState(FONTS[0]);
-  const [bold, setBold] = useState(true);
-  const [italic, setItalic] = useState(false);
+export interface TextChoice {
+  text: string;
+  style: 'filled' | 'single';
+  font: string;
+  bold: boolean;
+  italic: boolean;
+  heightMm: number; // capital-letter height for single-line text
+  align: 'left' | 'center' | 'right';
+}
+
+export function TextDialog({ onCancel, onAdd }: { onCancel: () => void; onAdd: (t: TextChoice) => void }) {
+  const [t, setT] = useState<TextChoice>({ text: '', style: 'filled', font: FONTS[0], bold: true, italic: false, heightMm: 5, align: 'left' });
+  const missing = t.style === 'single' ? [...new Set([...t.text].filter((c) => c !== '\n' && !supported(c)))] : [];
   return (
     <Modal title="Add text" onClose={onCancel}>
+      <div className="tabs">
+        <button className={t.style === 'filled' ? 'on' : ''} onClick={() => setT({ ...t, style: 'filled' })}>
+          Filled letters
+        </button>
+        <button className={t.style === 'single' ? 'on' : ''} onClick={() => setT({ ...t, style: 'single' })}>
+          Single line (fast)
+        </button>
+      </div>
+      <p className="hint">
+        {t.style === 'filled'
+          ? 'Any font on this PC, engraved as a picture. Best for bold, solid lettering.'
+          : 'Each letter is drawn as a few strokes (Hershey font), so it engraves as quick outlines. Best for small labels and serial numbers.'}
+      </p>
       <textarea
         autoFocus
         rows={3}
-        value={text}
+        value={t.text}
         placeholder="Type the text to engrave"
-        style={{ fontFamily: font, fontWeight: bold ? 700 : 400, fontStyle: italic ? 'italic' : 'normal' }}
-        onChange={(e) => setText(e.target.value)}
+        style={t.style === 'filled' ? { fontFamily: t.font, fontWeight: t.bold ? 700 : 400, fontStyle: t.italic ? 'italic' : 'normal' } : { fontFamily: 'Consolas, monospace' }}
+        onChange={(e) => setT({ ...t, text: e.target.value })}
       />
-      <div className="row">
-        <label className="grow">
-          Font
-          <select value={font} onChange={(e) => setFont(e.target.value)}>
-            {FONTS.map((f) => (
-              <option key={f} value={f}>
-                {f.split(',')[0].replace(/"/g, '')}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
-        </label>
-      </div>
+      {t.style === 'filled' ? (
+        <div className="row">
+          <label className="grow">
+            Font
+            <select value={t.font} onChange={(e) => setT({ ...t, font: e.target.value })}>
+              {FONTS.map((f) => (
+                <option key={f} value={f}>
+                  {f.split(',')[0].replace(/"/g, '')}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={t.bold} onChange={(e) => setT({ ...t, bold: e.target.checked })} /> Bold
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={t.italic} onChange={(e) => setT({ ...t, italic: e.target.checked })} /> Italic
+          </label>
+        </div>
+      ) : (
+        <div className="row">
+          <label className="grow">
+            Letter height mm
+            <input type="number" min="0.5" max="80" step="0.5" value={t.heightMm} onChange={(e) => setT({ ...t, heightMm: Number(e.target.value) })} />
+          </label>
+          <label className="grow">
+            Lines
+            <select value={t.align} onChange={(e) => setT({ ...t, align: e.target.value as TextChoice['align'] })}>
+              <option value="left">Left</option>
+              <option value="center">Centred</option>
+              <option value="right">Right</option>
+            </select>
+          </label>
+        </div>
+      )}
+      {missing.length > 0 && <p className="warn">This font has no {missing.join(' ')}; they'll be left blank.</p>}
       <div className="buttons">
         <button onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={!text.trim()} onClick={() => onAdd(text, font, bold, italic)}>
+        <button className="primary" disabled={!t.text.trim() || (t.style === 'single' && !(t.heightMm > 0))} onClick={() => onAdd(t)}>
           Add
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+export interface CodeChoice {
+  kind: 'qr' | 'barcode';
+  text: string;
+  level: QrLevel;
+  border: boolean;
+  format: string;
+  sizeMm: number; // QR: width; barcode: width
+}
+
+export function CodeDialog({ onCancel, onAdd }: { onCancel: () => void; onAdd: (c: CodeChoice) => void }) {
+  const [c, setC] = useState<CodeChoice>({ kind: 'qr', text: '', level: 'M', border: false, format: 'CODE128', sizeMm: 20 });
+  return (
+    <Modal title="QR code or barcode" onClose={onCancel}>
+      <div className="tabs">
+        <button className={c.kind === 'qr' ? 'on' : ''} onClick={() => setC({ ...c, kind: 'qr', sizeMm: 20 })}>
+          QR code
+        </button>
+        <button className={c.kind === 'barcode' ? 'on' : ''} onClick={() => setC({ ...c, kind: 'barcode', sizeMm: 40 })}>
+          Barcode
+        </button>
+      </div>
+      <label>
+        {c.kind === 'qr' ? 'Text or web address' : 'Value'}
+        <input type="text" autoFocus value={c.text} onChange={(e) => setC({ ...c, text: e.target.value })} placeholder={c.kind === 'qr' ? 'https://…' : '012345678905'} />
+      </label>
+      <div className="row">
+        {c.kind === 'qr' ? (
+          <label className="grow">
+            Error correction
+            <select value={c.level} onChange={(e) => setC({ ...c, level: e.target.value as QrLevel })}>
+              <option value="L">Low (smallest)</option>
+              <option value="M">Medium</option>
+              <option value="Q">High</option>
+              <option value="H">Highest (survives scratches)</option>
+            </select>
+          </label>
+        ) : (
+          <label className="grow">
+            Type
+            <select value={c.format} onChange={(e) => setC({ ...c, format: e.target.value })}>
+              {BARCODE_FORMATS.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label className="grow">
+          Width mm
+          <input type="number" min="3" max="100" step="1" value={c.sizeMm} onChange={(e) => setC({ ...c, sizeMm: Number(e.target.value) })} />
+        </label>
+      </div>
+      {c.kind === 'qr' && (
+        <label className="check">
+          <input type="checkbox" checked={c.border} onChange={(e) => setC({ ...c, border: e.target.checked })} /> Include the blank border (needed on dark materials)
+        </label>
+      )}
+      <p className="hint">It's added as a filled shape. On light materials the burnt parts are the dark modules, which is what phone cameras expect.</p>
+      <div className="buttons">
+        <button onClick={onCancel}>Cancel</button>
+        <button className="primary" disabled={!c.text.trim() || !(c.sizeMm > 0)} onClick={() => onAdd(c)}>
+          Add
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+export function PdfPageDialog({ name, pages, onCancel, onPick }: { name: string; pages: number; onCancel: () => void; onPick: (page: number) => void }) {
+  const [page, setPage] = useState(1);
+  return (
+    <Modal title={`Which page of ${name}?`} onClose={onCancel}>
+      <label>
+        Page (1 to {pages})
+        <input type="number" autoFocus min="1" max={pages} value={page} onChange={(e) => setPage(Math.max(1, Math.min(pages, Math.round(Number(e.target.value)) || 1)))} />
+      </label>
+      <p className="hint">The page comes in as a picture at its printed size, shrunk to fit the field if needed.</p>
+      <div className="buttons">
+        <button onClick={onCancel}>Cancel</button>
+        <button className="primary" onClick={() => onPick(page)}>
+          Import
         </button>
       </div>
     </Modal>

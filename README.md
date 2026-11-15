@@ -17,14 +17,23 @@ without LaserPecker Design Space.
 **Designs**
 - Import:
   - **SVG** and **DXF** drawings (lines, polylines with arcs, circles, arcs, ellipses, splines).
+  - **PDF** pages, at their printed size.
   - **G-code** (G0–G3, inches or mm, absolute or relative).
   - **Pictures** (PNG, JPG, BMP, WebP, GIF).
   - Use the Import button or drop files on the window.
-- Add **text** (choice of fonts, bold, italic) and **shapes**: square, rounded square, circle,
-  hexagon, star, heart, line.
+- Add **text** in two styles:
+  - **Filled letters**: any font on the PC, bold or italic.
+  - **Single line**: the fast Hershey stroke font, for labels and serial numbers.
+- Add **shapes**: square, rounded square, circle, hexagon, star, heart, line.
+- Add **QR codes** (four error-correction levels, optional quiet border) and **barcodes** (Code 128,
+  EAN-13, UPC-A, Code 39, ITF-14).
 - Move, size, **rotate**, **mirror** and **align** to the 100 × 100 mm field.
+- **Select several items**:
+  - Ctrl- or Shift-click, Shift-drag a box, or press Ctrl+A.
+  - Move, align, delete or duplicate them together, and set the laser settings for all of them at once.
 - Zoom (mouse wheel) and pan (drag empty space), with optional snap to whole millimetres.
 - **Undo and redo**, duplicate, copy and paste, and layer order (the order things are engraved in).
+- **Estimated job time** before you engrave, and the elapsed time while it runs.
 - **Autosave**: your design comes back when you reopen the app. You can also save and open
   `.lightrunner.json` files.
 
@@ -54,6 +63,8 @@ without LaserPecker Design Space.
 | --- | --- |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Ctrl+C / Ctrl+V / Ctrl+D | Copy / paste / duplicate |
+| Ctrl+A | Select everything |
+| Ctrl- or Shift-click, Shift-drag | Add to the selection, select with a box |
 | Delete | Delete the selection |
 | Arrow keys | Move 1 mm (Shift: 5 mm, Alt: 0.1 mm) |
 | Ctrl+I / Ctrl+O / Ctrl+S | Import / open / save |
@@ -79,3 +90,5 @@ Close LaserPecker Design Space before connecting. Only one program can use the L
 - `test/fixtures/lds-captures.json`: jobs and commands captured from LDS. The tests rebuild every one byte for byte.
 
 The protocol was worked out from USB captures of LDS 2.12.1 with an LP2 on firmware 3.7.7.
+
+Open-source parts and their licences are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

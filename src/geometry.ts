@@ -75,6 +75,17 @@ export function alignToField(item: Item, how: Align): { x: number; y: number } {
   return { x: item.x + (dx[how] ?? 0), y: item.y + (dy[how] ?? 0) };
 }
 
+/** Moves a group together so its combined bounds line up with the field. */
+export function alignGroupToField(items: Item[], how: Align): Map<string, { x: number; y: number }> {
+  const b = boundsOf(items);
+  const out = new Map<string, { x: number; y: number }>();
+  if (!b) return out;
+  const dx = { left: -b.x, hcenter: (FIELD_MM - b.w) / 2 - b.x, right: FIELD_MM - b.w - b.x }[how as 'left'] ?? 0;
+  const dy = { top: -b.y, vcenter: (FIELD_MM - b.h) / 2 - b.y, bottom: FIELD_MM - b.h - b.y }[how as 'top'] ?? 0;
+  for (const i of items) out.set(i.id, { x: i.x + dx, y: i.y + dy });
+  return out;
+}
+
 /** Douglas-Peucker: keeps the points needed to stay within `tol` of the original line. */
 export function simplifyPath(points: Point[], tol: number): Point[] {
   if (points.length < 3) return points.slice();

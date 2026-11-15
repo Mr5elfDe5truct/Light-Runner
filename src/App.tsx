@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { estimateSeconds, formatDuration } from '../shared/estimate.ts';
 import type { DeviceSettings, Status } from '../shared/lp2.ts';
-import type { DeviceInfo, LaserEvent, Material, PortInfo, RunPhase } from '../shared/types.ts';
-import { ConfirmDialog, LogDrawer, SaveMaterialDialog, SettingsDialog, TestGridDialog, TextDialog } from './dialogs.tsx';
-import { boundsOf, insideField } from './geometry.ts';
+import type { DeviceInfo, JobSpec, LaserEvent, Material, PortInfo, RunPhase } from '../shared/types.ts';
+import { barcodePaths, qrPaths } from './codes.ts';
+import { CodeDialog, ConfirmDialog, LogDrawer, PdfPageDialog, SaveMaterialDialog, SettingsDialog, TestGridDialog, TextDialog, type CodeChoice, type TextChoice } from './dialogs.tsx';
+import { alignGroupToField, boundsOf, insideField } from './geometry.ts';
+import { hersheyText } from './hershey.ts';
 import { buildJobs, gcodeText, loadImage, previewUrl, traceItem } from './imaging.ts';
 import { readDxf, readGcode, type Outline } from './importers.ts';
 import { DEFAULTS, fitToField, IMAGE_DEFAULTS, newId, normalizeItem, type ImageItem, type Item, type VectorItem } from './model.ts';
-import { MODE_LABEL, Properties } from './Properties.tsx';
+import { pdfPageCount, renderPdfPage } from './pdf.ts';
+import { MODE_LABEL, MultiProperties, Properties } from './Properties.tsx';
 import { shapePaths, SHAPES, type ShapeKind } from './shapes.ts';
 import { gridLayout, type GridSpec } from './testGrid.ts';
 import { useHistory } from './useHistory.ts';
@@ -25,6 +29,7 @@ interface RunState {
   size?: number;
 }
 type LogLine = { level: string; message: string; at: string };
+type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code';
 
 function presetMode(item: Item): 'line' | 'fill' | 'image' {
   if (item.kind === 'vector') return item.mode === 'line' ? 'line' : 'fill';
@@ -62,18 +67,21 @@ export function App() {
   const [run, setRun] = useState<RunState>({ phase: 'idle' });
   const [log, setLog] = useState<LogLine[]>([]);
   const [logOpen, setLogOpen] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selection, setSelection] = useState<string[]>([]);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [ldsMaterials, setLdsMaterials] = useState<Material[]>([]);
   const [myMaterials, setMyMaterials] = useState<Material[]>(loadMyMaterials);
   const [brightness, setBrightness] = useState(1);
   const [lockAspect, setLockAspect] = useState(true);
   const [snap, setSnap] = useState(false);
-  const [dialog, setDialog] = useState<null | 'text' | 'settings' | 'grid' | 'material' | 'shapes'>(null);
-  const [confirm, setConfirm] = useState<{ items: Item[]; jobs: number } | null>(null);
+  const [dialog, setDialog] = useState<DialogName>(null);
+  const [pdf, setPdf] = useState<{ name: string; data: ArrayBuffer; pages: number } | null>(null);
+  const [confirm, setConfirm] = useState<{ items: Item[]; jobs: JobSpec[]; seconds: number } | null>(null);
   const [settings, setSettings] = useState<DeviceSettings>({ beep: false, reverseDirection: false });
   const [busy, setBusy] = useState(false);
-  const clipboard = useRef<Item | null>(null);
+  const [runStarted, setRunStarted] = useState<number | null>(null);
+  const [, tick] = useState(0);
+  const clipboard = useRef<Item[]>([]);
   const restored = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
@@ -125,9 +133,16 @@ export function App() {
   // Autosave the design a moment after each change.
   useEffect(() => {
     if (!restored.current) return;
-    const t = setTimeout(() => laser.saveDraft(JSON.stringify({ app: 'Light Runner', version: 2, items })).catch(() => undefined), 1500);
+    const t = setTimeout(() => laser.saveDraft(JSON.stringify({ app: 'Light Runner', version: 3, items })).catch(() => undefined), 1500);
     return () => clearTimeout(t);
   }, [items]);
+
+  // A clock for the elapsed time while a job runs.
+  useEffect(() => {
+    if (run.phase === 'idle' || run.phase === 'previewing') return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [run.phase]);
 
   // Keep the on-screen look of images up to date. Each image is drawn once per look and cached,
   // so a change to one doesn't redraw the rest and one failure can't hold up the others.
@@ -143,8 +158,9 @@ export function App() {
       for (const item of items) {
         if (item.kind !== 'image' || cancelled) continue;
         const look = lookOf(item);
-        if (previewCache.current.has(look)) {
-          setPreviews((p) => (p[item.id] === previewCache.current.get(look) ? p : { ...p, [item.id]: previewCache.current.get(look)! }));
+        const cached = previewCache.current.get(look);
+        if (cached) {
+          setPreviews((p) => (p[item.id] === cached ? p : { ...p, [item.id]: cached }));
           continue;
         }
         try {
@@ -162,18 +178,34 @@ export function App() {
     };
   }, [imageKey]);
 
-  const sel = items.find((i) => i.id === selected) ?? null;
+  const selected = useMemo(() => new Set(selection), [selection]);
+  const selItems = items.filter((i) => selected.has(i.id));
+  const sel = selItems.length === 1 ? selItems[0] : null;
   const update = (id: string, patch: Partial<Item>, key?: string) =>
     history.commit((list) => list.map((i) => (i.id === id ? ({ ...i, ...patch } as Item) : i)), key ? `${id}:${key}` : undefined);
+  const updateMany = (ids: Set<string>, patch: Partial<Item> | ((i: Item) => Partial<Item>), key?: string) =>
+    history.commit((list) => list.map((i) => (ids.has(i.id) ? ({ ...i, ...(typeof patch === 'function' ? patch(i) : patch) } as Item) : i)), key ? `many:${key}` : undefined);
   const visible = items.filter((i) => i.visible);
   const working = run.phase !== 'idle' && run.phase !== 'previewing';
+
+  const select = (ids: string[], additive: boolean) => {
+    if (!additive) return setSelection(ids);
+    setSelection((cur) => {
+      const next = new Set(cur);
+      for (const id of ids) {
+        if (ids.length === 1 && next.has(id)) next.delete(id);
+        else next.add(id);
+      }
+      return [...next];
+    });
+  };
 
   // ---------------------------------------------------------------- adding things
 
   const addItems = (added: Item[]) => {
     if (!added.length) return;
     history.commit((l) => [...l, ...added]);
-    setSelected(added[added.length - 1].id);
+    setSelection(added.map((i) => i.id));
   };
 
   const vectorItem = (name: string, o: Outline, maxMm = 60): VectorItem => ({
@@ -212,8 +244,13 @@ export function App() {
           added.push(vectorItem(file.name, { paths: v.paths, width: v.width, height: v.height }));
         } else if (ext === 'dxf') {
           added.push(vectorItem(file.name, readDxf(await file.text())));
-        } else if (['gcode', 'nc', 'gc', 'ngc', 'tap', 'txt'].includes(ext)) {
+        } else if (['gcode', 'nc', 'gc', 'ngc', 'tap'].includes(ext)) {
           added.push(vectorItem(file.name, readGcode(await file.text()), 100));
+        } else if (ext === 'pdf') {
+          const data = await file.arrayBuffer();
+          const pages = await pdfPageCount(data);
+          if (pages > 1) setPdf({ name: file.name, data, pages });
+          else added.push(await pdfItem(file.name, data, 1));
         } else if (ext === 'json') {
           await openProject(file);
           return;
@@ -234,11 +271,43 @@ export function App() {
     addItems(added);
   };
 
-  const addText = (text: string, font: string, bold: boolean, italic: boolean) => {
+  const pdfItem = async (name: string, data: ArrayBuffer, page: number): Promise<ImageItem> => {
+    const p = await renderPdfPage(data, page);
+    return imageItem(`${name} p${page}`, p.src, p.widthMm, p.heightMm, { mode: 'bw', ...fitToField(p.widthMm, p.heightMm, 100) });
+  };
+
+  const addText = (t: TextChoice) => {
     setDialog(null);
-    const { src, aspect } = textImage(text, font, bold, italic);
-    const h = 8 * text.split('\n').length;
-    addItems([imageItem(`Text: ${text.replace(/\s+/g, ' ').slice(0, 24)}`, src, h * aspect, h, { mode: 'bw', ...fitToField(h * aspect, h, 60) })]);
+    const label = `Text: ${t.text.replace(/\s+/g, ' ').slice(0, 24)}`;
+    if (t.style === 'single') {
+      const h = hersheyText(t.text, t.heightMm, t.align);
+      if (!h.paths.length) return fail(new Error('None of those characters are in the single-line font.'));
+      const item = vectorItem(label, { paths: h.paths, width: h.width, height: h.height }, 100);
+      return addItems([{ ...item, w: h.width, h: h.height, x: (100 - h.width) / 2, y: (100 - h.height) / 2 }]);
+    }
+    const { src, aspect } = textImage(t.text, t.font, t.bold, t.italic);
+    const h = 8 * t.text.split('\n').length;
+    addItems([imageItem(label, src, h * aspect, h, { mode: 'bw', ...fitToField(h * aspect, h, 60) })]);
+  };
+
+  const addCode = async (c: CodeChoice) => {
+    try {
+      if (c.kind === 'qr') {
+        const qr = qrPaths(c.text.trim(), c.level, c.border ? 4 : 0);
+        const item = vectorItem(`QR: ${c.text.slice(0, 24)}`, { paths: qr.paths, width: qr.size, height: qr.size });
+        addItems([{ ...item, mode: 'fill', ...fitToField(c.sizeMm, c.sizeMm, 100) }]);
+        const module = c.sizeMm / qr.size;
+        if (module < 0.3) note(`Each QR square is only ${module.toFixed(2)} mm; make the code bigger or use 2K if phones can't read it.`, 'error');
+      } else {
+        const b = await barcodePaths(c.text.trim(), c.format);
+        const item = vectorItem(`Barcode: ${c.text.slice(0, 24)}`, { paths: b.paths, width: b.width, height: b.height });
+        const h = (c.sizeMm * b.height) / b.width;
+        addItems([{ ...item, mode: 'fill', ...fitToField(c.sizeMm, Math.max(h, c.sizeMm * 0.3), 100) }]);
+      }
+      setDialog(null);
+    } catch (e) {
+      fail(e);
+    }
   };
 
   const addShape = (kind: ShapeKind) => {
@@ -263,11 +332,12 @@ export function App() {
       depth: c.depth,
       passes: spec.passes,
     }));
+    // Labels in the fast single-line font.
     for (const l of labels) {
-      const { src, aspect } = textImage(l.text, '"Segoe UI", sans-serif', true);
-      const h = l.h;
-      const w = Math.min(l.w, h * aspect);
-      made.push(imageItem(`Label ${l.text}`, src, w, h, { mode: 'bw', x: l.x + (l.w - w) / 2, y: l.y, w, h, power: labelPower, depth: labelDepth }));
+      const t = hersheyText(l.text, l.h * 0.8);
+      const w = Math.min(l.w, t.width);
+      const h = (t.height * w) / t.width;
+      made.push({ ...vectorItem(`Label ${l.text}`, { paths: t.paths, width: t.width, height: t.height }), x: l.x + (l.w - w) / 2, y: l.y + (l.h - h) / 2, w, h, power: labelPower, depth: labelDepth });
     }
     addItems(made);
     note(`Added a ${spec.cols} × ${spec.rows} material test (${cells.length} squares).`);
@@ -275,16 +345,15 @@ export function App() {
 
   // ---------------------------------------------------------------- editing
 
-  const remove = (id = selected) => {
-    if (!id) return;
-    history.commit((l) => l.filter((i) => i.id !== id));
-    setSelected(null);
+  const removeSelected = () => {
+    if (!selection.length) return;
+    history.commit((l) => l.filter((i) => !selected.has(i.id)));
+    setSelection([]);
   };
 
-  const duplicate = (source = sel, offset = 3) => {
-    if (!source) return;
-    const copy = { ...structuredClone(source), id: newId(), name: `${source.name} copy`, x: source.x + offset, y: source.y + offset };
-    addItems([copy]);
+  const duplicate = (sources: Item[] = selItems, offset = 3) => {
+    if (!sources.length) return;
+    addItems(sources.map((s) => ({ ...structuredClone(s), id: newId(), name: sources.length === 1 ? `${s.name} copy` : s.name, x: s.x + offset, y: s.y + offset })));
   };
 
   const reorder = (id: string, dir: -1 | 1) =>
@@ -308,14 +377,22 @@ export function App() {
     }
   };
 
-  const applyMaterial = (item: Item, materialId: string) => {
+  const materialPatch = (item: Item, materialId: string): Partial<Item> | null => {
     const m = materials.find((x) => x.id === materialId);
-    if (!m) return update(item.id, { material: undefined });
+    if (!m) return { material: undefined };
     const dpi = item.resolution === '2K' ? 508 : 254;
-    const mode = presetMode(item);
-    const best = m.presets.filter((p) => p.mode === mode).sort((a, b) => Math.abs(a.dpi - dpi) - Math.abs(b.dpi - dpi))[0];
-    if (!best) return note(`${m.name} has no setting for ${MODE_LABEL[item.mode].toLowerCase()} jobs.`, 'error');
-    update(item.id, { material: materialId, power: best.power, depth: Math.max(1, best.depth), passes: best.passes });
+    const best = m.presets.filter((p) => p.mode === presetMode(item)).sort((a, b) => Math.abs(a.dpi - dpi) - Math.abs(b.dpi - dpi))[0];
+    if (!best) {
+      note(`${m.name} has no setting for ${MODE_LABEL[item.mode].toLowerCase()} jobs; ${item.name} is unchanged.`, 'error');
+      return null;
+    }
+    return { material: materialId, power: best.power, depth: Math.max(1, best.depth), passes: best.passes };
+  };
+
+  const applyMaterial = (targets: Item[], materialId: string) => {
+    if (materialId === '?') return;
+    const patches = new Map(targets.map((i) => [i.id, materialPatch(i, materialId)] as const));
+    updateMany(new Set(targets.map((i) => i.id)), (i) => patches.get(i.id) ?? {});
   };
 
   const saveMaterial = (name: string) => {
@@ -328,14 +405,13 @@ export function App() {
       : [...myMaterials, { id: `my-${newId()}`, name, presets: [preset] }];
     setMyMaterials(next);
     localStorage.setItem(MY_MATERIALS_KEY, JSON.stringify(next));
-    const id = (existing ?? next[next.length - 1]).id;
-    update(sel.id, { material: id });
+    update(sel.id, { material: (existing ?? next[next.length - 1]).id });
     note(`Saved "${name}" for ${MODE_LABEL[sel.mode].toLowerCase()} at ${sel.resolution}.`);
   };
 
   // ---------------------------------------------------------------- projects
 
-  const saveProject = () => download('design.lightrunner.json', JSON.stringify({ app: 'Light Runner', version: 2, items }, null, 1), 'application/json');
+  const saveProject = () => download('design.lightrunner.json', JSON.stringify({ app: 'Light Runner', version: 3, items }, null, 1), 'application/json');
 
   const openProject = async (file: File | undefined) => {
     if (!file) return;
@@ -343,7 +419,7 @@ export function App() {
       const data = JSON.parse(await file.text());
       if (data.app !== 'Light Runner' || !Array.isArray(data.items)) throw new Error('That is not a Light Runner design.');
       history.commit(data.items.map(normalizeItem));
-      setSelected(null);
+      setSelection([]);
       note(`Opened ${file.name}.`);
     } catch (e) {
       fail(e);
@@ -353,7 +429,7 @@ export function App() {
   const newDesign = () => {
     if (items.length && !window.confirm('Start a new design? You can undo this.')) return;
     history.commit([]);
-    setSelected(null);
+    setSelection([]);
   };
 
   // ---------------------------------------------------------------- laser actions
@@ -371,7 +447,7 @@ export function App() {
 
   const connect = () => act(async () => (device ? laser.disconnect() : laser.connect(port)));
 
-  const previewTargets = sel && sel.visible ? [sel] : visible;
+  const previewTargets = selItems.filter((i) => i.visible).length ? selItems.filter((i) => i.visible) : visible;
   const startPreview = (center = false) =>
     act(async () => {
       const b = boundsOf(previewTargets);
@@ -389,25 +465,29 @@ export function App() {
       const outside = visible.filter((i) => !insideField(i));
       if (outside.length) throw new Error(`${outside.map((i) => i.name).join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the 100 × 100 mm field.`);
       const jobs = await buildJobs(visible);
-      setConfirm({ items: visible, jobs: jobs.length });
+      setConfirm({ items: visible, jobs, seconds: jobs.reduce((s, j) => s + estimateSeconds(j), 0) });
     });
 
-  const engrave = (list: Item[]) =>
+  const engrave = (jobs: JobSpec[]) =>
     act(async () => {
       setConfirm(null);
       if (run.phase === 'previewing') await laser.stopPreview();
-      const jobs = await buildJobs(list);
       note(`Sending ${jobs.length} job${jobs.length === 1 ? '' : 's'}.`);
       const started = Date.now();
-      await laser.run(jobs);
-      note(`Done in ${formatTime((Date.now() - started) / 1000)}.`);
+      setRunStarted(started);
+      try {
+        await laser.run(jobs);
+        note(`Done in ${formatDuration((Date.now() - started) / 1000)}.`);
+      } finally {
+        setRunStarted(null);
+      }
     });
 
   // ---------------------------------------------------------------- keyboard
 
   const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keys.current = (e: KeyboardEvent) => {
-    if (dialog || confirm) return;
+    if (dialog || confirm || pdf) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     if (ctrl && k === 'z' && !e.shiftKey) {
@@ -427,23 +507,26 @@ export function App() {
       fileInput.current?.click();
     } else if (isTyping(e)) {
       return;
+    } else if (ctrl && k === 'a') {
+      e.preventDefault();
+      setSelection(items.filter((i) => i.visible).map((i) => i.id));
     } else if (ctrl && k === 'd') {
       e.preventDefault();
       duplicate();
-    } else if (ctrl && k === 'c' && sel) {
-      clipboard.current = structuredClone(sel);
-    } else if (ctrl && k === 'v' && clipboard.current) {
+    } else if (ctrl && k === 'c' && selItems.length) {
+      clipboard.current = structuredClone(selItems);
+    } else if (ctrl && k === 'v' && clipboard.current.length) {
       duplicate(clipboard.current, 5);
-    } else if ((k === 'delete' || k === 'backspace') && sel) {
-      remove();
+    } else if ((k === 'delete' || k === 'backspace') && selection.length) {
+      removeSelected();
     } else if (k === 'escape') {
-      setSelected(null);
-    } else if (sel && k.startsWith('arrow')) {
+      setSelection([]);
+    } else if (selection.length && k.startsWith('arrow')) {
       e.preventDefault();
       const d = e.shiftKey ? 5 : e.altKey ? 0.1 : 1;
       const dx = k === 'arrowleft' ? -d : k === 'arrowright' ? d : 0;
       const dy = k === 'arrowup' ? -d : k === 'arrowdown' ? d : 0;
-      update(sel.id, { x: Math.round((sel.x + dx) * 100) / 100, y: Math.round((sel.y + dy) * 100) / 100 }, 'nudge');
+      updateMany(selected, (i) => ({ x: Math.round((i.x + dx) * 100) / 100, y: Math.round((i.y + dy) * 100) / 100 }), 'nudge');
     }
   };
   useEffect(() => {
@@ -454,15 +537,16 @@ export function App() {
 
   // ---------------------------------------------------------------- view
 
-  const statusText = useMemo(() => {
+  const elapsed = runStarted ? ` · ${formatDuration((Date.now() - runStarted) / 1000)}` : '';
+  const statusText = (() => {
     if (!device) return 'Not connected';
-    if (run.phase === 'uploading') return `Sending ${run.name ?? ''} — ${run.size ? Math.round(((run.uploaded ?? 0) / run.size) * 100) : 0} %`;
+    if (run.phase === 'uploading') return `Sending ${run.name ?? ''} — ${run.size ? Math.round(((run.uploaded ?? 0) / run.size) * 100) : 0} %${elapsed}`;
     if (run.phase === 'engraving' || run.phase === 'paused')
-      return `${run.phase === 'paused' ? 'Paused' : 'Engraving'} ${run.name ?? ''} — ${status?.progress ?? 0} %${run.jobs && run.jobs > 1 ? ` · job ${run.job} of ${run.jobs}` : ''}`;
+      return `${run.phase === 'paused' ? 'Paused' : 'Engraving'} ${run.name ?? ''} — ${status?.progress ?? 0} %${run.jobs && run.jobs > 1 ? ` · job ${run.job} of ${run.jobs}` : ''}${elapsed}`;
     if (run.phase === 'previewing') return 'Previewing — the LP2 is tracing the frame';
     if (run.phase === 'stopping') return 'Stopping';
     return 'Ready';
-  }, [device, run, status]);
+  })();
 
   const progress = run.phase === 'uploading' && run.size ? (run.uploaded ?? 0) / run.size : run.phase === 'engraving' || run.phase === 'paused' ? (status?.progress ?? 0) / 100 : 0;
   const lastLog = log[log.length - 1];
@@ -506,7 +590,7 @@ export function App() {
 
       <div className="main">
         <nav className="tools">
-          <button onClick={() => fileInput.current?.click()} title="SVG, DXF, G-code or a picture (Ctrl+I); you can also drop files on the window">
+          <button onClick={() => fileInput.current?.click()} title="SVG, DXF, PDF, G-code or a picture (Ctrl+I); you can also drop files on the window">
             Import
           </button>
           <button onClick={() => setDialog('text')}>Text</button>
@@ -522,6 +606,9 @@ export function App() {
               </div>
             )}
           </div>
+          <button onClick={() => setDialog('code')} title="QR codes and barcodes">
+            QR / barcode
+          </button>
           <button onClick={() => setDialog('grid')} title="A grid of power and depth settings to test a material">
             Test grid
           </button>
@@ -537,20 +624,31 @@ export function App() {
           <label className="check small" title="Move in whole millimetres">
             <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> Snap
           </label>
-          <input ref={fileInput} type="file" multiple accept=".svg,.dxf,.gcode,.nc,.gc,.ngc,.tap,.png,.jpg,.jpeg,.bmp,.webp,.gif" hidden onChange={(e) => importFiles(e.target.files).then(() => (e.target.value = ''))} />
+          <input ref={fileInput} type="file" multiple accept=".svg,.dxf,.pdf,.gcode,.nc,.gc,.ngc,.tap,.png,.jpg,.jpeg,.bmp,.webp,.gif" hidden onChange={(e) => importFiles(e.target.files).then(() => (e.target.value = ''))} />
           <input ref={projectInput} type="file" accept=".json" hidden onChange={(e) => openProject(e.target.files?.[0]).then(() => (e.target.value = ''))} />
         </nav>
 
         <section className="canvas">
-          <Workspace items={items} previews={previews} selected={selected} snap={snap} onSelect={setSelected} onMoveStart={history.checkpoint} onMove={(id, x, y) => history.replace((l) => l.map((i) => (i.id === id ? { ...i, x, y } : i)))} />
-          {!items.length && <div className="empty">Import an SVG, DXF, G-code or picture (or drop it here), or add text, a shape or a test grid.</div>}
+          <Workspace
+            items={items}
+            previews={previews}
+            selected={selected}
+            snap={snap}
+            onSelect={select}
+            onMoveStart={history.checkpoint}
+            onMove={(pos) => history.replace((l) => l.map((i) => (pos.has(i.id) ? { ...i, ...pos.get(i.id)! } : i)))}
+          />
+          {!items.length && <div className="empty">Import an SVG, DXF, PDF, G-code or picture (or drop it here), or add text, a shape, a QR code or a test grid.</div>}
         </section>
 
         <aside className="side">
-          <h3>Layers · engrave order</h3>
+          <h3>
+            Layers · engrave order
+            {items.length > 0 && <small className="count">{items.length}</small>}
+          </h3>
           <ul className="layers">
             {items.map((i) => (
-              <li key={i.id} className={i.id === selected ? 'on' : ''} onClick={() => setSelected(i.id)}>
+              <li key={i.id} className={selected.has(i.id) ? 'on' : ''} onClick={(e) => select([i.id], e.ctrlKey || e.shiftKey || e.metaKey)} title="Ctrl- or Shift-click to select several">
                 <input type="checkbox" checked={i.visible} title="Engrave this" onChange={(e) => update(i.id, { visible: e.target.checked })} onClick={(e) => e.stopPropagation()} />
                 <span>{i.name}</span>
                 <small>{MODE_LABEL[i.mode]}</small>
@@ -566,13 +664,27 @@ export function App() {
               lockAspect={lockAspect}
               onLockAspect={setLockAspect}
               onChange={(patch, key) => update(sel.id, patch, key)}
-              onMaterial={(id) => applyMaterial(sel, id)}
+              onMaterial={(id) => applyMaterial([sel], id)}
               onSaveMaterial={() => setDialog('material')}
               onTrace={trace}
               onExportGcode={() => sel.kind === 'vector' && download(`${sel.name.replace(/\.[^.]+$/, '')}.gcode`, gcodeText(sel))}
               onDuplicate={() => duplicate()}
-              onDelete={() => remove()}
+              onDelete={removeSelected}
               onOrder={(dir) => reorder(sel.id, dir)}
+            />
+          )}
+          {selItems.length > 1 && (
+            <MultiProperties
+              items={selItems}
+              materials={materials}
+              onChangeAll={(patch, key) => updateMany(selected, patch, key)}
+              onAlign={(how) => {
+                const pos = alignGroupToField(selItems, how);
+                updateMany(selected, (i) => pos.get(i.id) ?? {});
+              }}
+              onMaterial={(id) => applyMaterial(selItems, id)}
+              onDuplicate={() => duplicate()}
+              onDelete={removeSelected}
             />
           )}
         </aside>
@@ -597,7 +709,7 @@ export function App() {
         ) : (
           <>
             <button onClick={() => startPreview(false)} disabled={!device || busy || working || !previewTargets.length} title="Trace the frame of what will be engraved">
-              Preview {sel && sel.visible ? 'selected' : 'all'}
+              Preview {selItems.some((i) => i.visible) ? 'selected' : 'all'}
             </button>
             <button onClick={() => startPreview(true)} disabled={!device || busy || working || !previewTargets.length} title="Show just the centre point">
               Centre
@@ -631,10 +743,25 @@ export function App() {
       </div>
       {logOpen && <LogDrawer log={log} onClose={() => setLogOpen(false)} />}
 
-      {confirm && <ConfirmDialog items={confirm.items} jobs={confirm.jobs} onCancel={() => setConfirm(null)} onGo={() => engrave(confirm.items)} />}
+      {confirm && <ConfirmDialog items={confirm.items} jobs={confirm.jobs.length} seconds={confirm.seconds} onCancel={() => setConfirm(null)} onGo={() => engrave(confirm.jobs)} />}
       {dialog === 'text' && <TextDialog onCancel={() => setDialog(null)} onAdd={addText} />}
+      {dialog === 'code' && <CodeDialog onCancel={() => setDialog(null)} onAdd={addCode} />}
       {dialog === 'grid' && <TestGridDialog onCancel={() => setDialog(null)} onCreate={addTestGrid} />}
-      {dialog === 'material' && sel && <SaveMaterialDialog suggested=""onCancel={() => setDialog(null)} onSave={saveMaterial} />}
+      {dialog === 'material' && sel && <SaveMaterialDialog suggested="" onCancel={() => setDialog(null)} onSave={saveMaterial} />}
+      {pdf && (
+        <PdfPageDialog
+          name={pdf.name}
+          pages={pdf.pages}
+          onCancel={() => setPdf(null)}
+          onPick={(page) => {
+            const p = pdf;
+            setPdf(null);
+            pdfItem(p.name, p.data, page)
+              .then((item) => addItems([item]))
+              .catch(fail);
+          }}
+        />
+      )}
       {dialog === 'settings' && (
         <SettingsDialog
           initial={settings}
@@ -652,10 +779,4 @@ export function App() {
       )}
     </div>
   );
-}
-
-function formatTime(seconds: number) {
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  return m ? `${m} min ${s} s` : `${s} s`;
 }

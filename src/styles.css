@@ -134,6 +134,13 @@ button.on { border-color: var(--accent); color: var(--accent); }
 .props h4 { margin: 8px 0 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; border-top: 1px solid var(--line); padding-top: 8px; }
 .status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .table-scroll { max-height: 40vh; overflow-y: auto; }
+.dialog label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+.workspace, .tools, .layers { user-select: none; }
+.marquee { fill: rgba(61, 139, 255, 0.12); stroke: var(--laser); stroke-width: 1px; vector-effect: non-scaling-stroke; stroke-dasharray: 4 3; }
+.tabs { display: flex; gap: 4px; }
+.tabs button { flex: 1; }
+.estimate { margin: 2px 0; }
+.side h3 .count { float: right; color: var(--muted); font-weight: 400; }
 .dialog input[type='text'] { width: 100%; }
 
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; }
