@@ -50,13 +50,25 @@ export class GrblLaser extends EventEmitter {
   }
 
   private lastState = '';
+  private lastAlarm = 0; // the code from the last "ALARM:n" line
+  private failure: string | null = null; // set when an alarm ends a job early
 
-  /** GRBL refuses commands while in alarm; unlock first ($X). */
-  private async unlockIfAlarm() {
+  /**
+   * GRBL refuses commands while in alarm; unlock first ($X). After a limit alarm (1, 2, 10) the
+   * machine no longer knows where the head is, so that needs the person: unless `force` (used by
+   * Home's "set this spot as 0,0" and the homing cycle, which re-establish the position), refuse.
+   */
+  private async unlockIfAlarm(force = false) {
     if (!this.lastState.startsWith('Alarm')) return;
+    if (!force && [1, 2, 10].includes(this.lastAlarm)) {
+      throw new Error(
+        `The machine hit a limit (ALARM:${this.lastAlarm}), so it no longer knows where the head is. Move the head clear by hand, then use Home → "Set this spot as 0,0" (or the homing cycle) before running anything.`,
+      );
+    }
     this.inFlight = [];
     await this.command('$X').catch(() => undefined);
     this.lastState = 'Idle';
+    this.lastAlarm = 0;
     this.log('Unlocked the machine ($X).');
   }
 
@@ -67,7 +79,8 @@ export class GrblLaser extends EventEmitter {
       if (s) {
         const state = s.state.startsWith('Hold') ? 'paused' : s.state === 'Run' ? 'engraving' : s.state === 'Idle' ? 'idle' : 'unknown';
         const progress = this.total ? Math.round((this.acked / this.total) * 100) : 0;
-        this.emitEvent({ type: 'status', status: { state, progress, power: 0, depth: 0, fileId: '' } });
+        const pos = { x: s.x, y: this.profile.originBottomLeft ? this.profile.bedH - s.y : s.y };
+        this.emitEvent({ type: 'status', status: { state, progress, power: 0, depth: 0, fileId: '', pos } });
         if (s.state.startsWith('Alarm') && !this.lastState.startsWith('Alarm')) this.log('The machine is in alarm (locked). Light Runner unlocks it ($X) before the next command.', 'error');
         this.lastState = s.state;
       }
@@ -85,7 +98,12 @@ export class GrblLaser extends EventEmitter {
       this.acked++;
       if (line.startsWith('error')) this.log(`GRBL refused a line (${line}).`, 'error');
     }
-    if (line.startsWith('ALARM')) this.log(`GRBL alarm: ${line}`, 'error');
+    if (line.startsWith('ALARM')) {
+      this.lastAlarm = Number(line.split(':')[1]) || 0;
+      const meaning: Record<number, string> = { 1: 'hard limit hit', 2: 'move would leave the work area (soft limit)', 3: 'reset while moving', 6: 'homing reset', 8: 'homing could not clear the switch', 9: 'homing found no limit switch', 10: 'limit hit while homing' };
+      this.log(`GRBL alarm: ${line}${meaning[this.lastAlarm] ? ` (${meaning[this.lastAlarm]})` : ''}.`, 'error');
+      if (this.total) this.failure = `The machine stopped with ${line}${meaning[this.lastAlarm] ? ` (${meaning[this.lastAlarm]})` : ''}.`;
+    }
     for (let i = 0; i < this.lineWaiters.length; i++) {
       if (this.lineWaiters[i](line)) {
         this.lineWaiters.splice(i, 1);
@@ -199,8 +217,10 @@ export class GrblLaser extends EventEmitter {
     this.acked = 0;
     this.inFlight = [];
     let next = 0;
+    this.failure = null;
     while (this.acked < lines.length) {
       if (this.stopRequested || !this.connected) return;
+      if (this.failure) throw new Error(this.failure);
       const k = linesToSend(this.inFlight, lines.slice(next, next + 64));
       for (let i = 0; i < k; i++) {
         this.inFlight.push(lines[next].length + 1);
@@ -213,6 +233,8 @@ export class GrblLaser extends EventEmitter {
     await sleep(400);
     for (;;) {
       const s = await this.waitLine((l) => l.startsWith('<'), 3000).catch(() => '');
+      if (this.failure) throw new Error(this.failure);
+      if (/^<Alarm/.test(s)) throw new Error('The machine went into alarm before the job finished.');
       if (/^<Idle/.test(s) || this.stopRequested || !this.connected) return;
     }
   }
@@ -286,7 +308,7 @@ export class GrblLaser extends EventEmitter {
    */
   async home(how: 'origin' | 'zero' | 'cycle' = 'origin') {
     if (this.phase !== 'idle') throw new Error('The laser is busy.');
-    await this.unlockIfAlarm();
+    await this.unlockIfAlarm(how !== 'origin');
     this.setPhase('homing');
     try {
       this.inFlight = [];
@@ -311,6 +333,32 @@ export class GrblLaser extends EventEmitter {
     } finally {
       this.setPhase('idle');
     }
+  }
+
+  /**
+   * Jogs the head (GRBL's $J), laser off. Relative moves are in design directions (+y = towards
+   * the front, down the screen); `to` moves to a design position. Clamped to the bed.
+   */
+  async jog(move: { dx?: number; dy?: number; to?: { x: number; y: number } }, feed = 3000) {
+    if (this.phase !== 'idle') throw new Error('The laser is busy.');
+    await this.unlockIfAlarm();
+    const flip = this.profile.originBottomLeft ? -1 : 1;
+    let cmd: string;
+    if (move.to) {
+      const x = Math.max(0, Math.min(this.profile.bedW, move.to.x));
+      const yDesign = Math.max(0, Math.min(this.profile.bedH, move.to.y));
+      const y = this.profile.originBottomLeft ? this.profile.bedH - yDesign : yDesign;
+      cmd = `$J=G90 G21 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(feed)}`;
+    } else {
+      cmd = `$J=G91 G21 X${(move.dx ?? 0).toFixed(3)} Y${((move.dy ?? 0) * flip).toFixed(3)} F${Math.round(feed)}`;
+    }
+    this.inFlight = [];
+    await this.command(cmd, 5000);
+  }
+
+  /** Stops a jog straight away (GRBL's jog-cancel real-time command). */
+  async cancelJog() {
+    await this.write(Buffer.from([0x85])).catch(() => undefined);
   }
 
   /** A timed test fire (beam or strobe); the program switches the laser off by itself at the end. */

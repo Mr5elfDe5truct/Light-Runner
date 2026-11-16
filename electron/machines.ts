@@ -20,6 +20,11 @@ export class Machines extends EventEmitter {
     return this.current.connected;
   }
 
+  /** The connected laser, if any (for a window that was reloaded). */
+  get info() {
+    return this.current.connected ? this.current.info : null;
+  }
+
   ports() {
     return this.lp2.ports();
   }
@@ -80,6 +85,12 @@ export class Machines extends EventEmitter {
   }
   fire(spec: FireSpec) {
     return this.grblOnly('Test fire').fire(spec);
+  }
+  jog(move: { dx?: number; dy?: number; to?: { x: number; y: number } }, feed?: number) {
+    return this.grblOnly('Jogging').jog(move, feed);
+  }
+  cancelJog() {
+    return this.current === this.grbl ? this.grbl.cancelJog() : Promise.resolve();
   }
   stopFire() {
     return this.current === this.grbl ? this.grbl.stopFire() : Promise.resolve();

@@ -65,7 +65,19 @@ without LaserPecker Design Space. It also drives **G-code (GRBL) diode lasers**,
 - **Test grid** makes a power × depth grid of squares with labels, to find the right settings for a
   new material.
 
+**G-code laser controls**
+- **Jog pad**: arrows in 0.1, 1, 10 or 50 mm steps, Go to 0,0, and Move to the selection.
+- **Live head position**: a red marker on the design follows the laser head.
+- **Home ▾**: go to 0,0, set this spot as 0,0, or run the homing cycle.
+- **Fire laser…**: a timed test fire (steady beam or strobe).
+- **Air assist**: air on for the whole job.
+- **Alarm handling**: after a limit alarm, Light Runner won't unlock until you re-zero.
+- **One program per job**: the head goes from item to item and returns home once.
+
 **Placing and producing**
+- **Simulate**: plays back the laser's path with live timing, before anything fires.
+- **Array**: copies the selection into rows and columns.
+- **When a job ends**: a Windows notification, and the PC is kept awake while it runs.
 - **Camera placement**:
   - Use a webcam or a photo, and the laser traces the field.
   - Click its four corners, and the straightened photo sits under your design.

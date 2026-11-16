@@ -5,6 +5,7 @@ const call = (channel: string) => (...args: unknown[]) => ipcRenderer.invoke(cha
 
 const api: LaserApi = {
   ports: call('laser:ports') as LaserApi['ports'],
+  state: call('laser:state') as LaserApi['state'],
   connect: call('laser:connect') as LaserApi['connect'],
   disconnect: call('laser:disconnect') as LaserApi['disconnect'],
   run: call('laser:run') as LaserApi['run'],
@@ -16,6 +17,8 @@ const api: LaserApi = {
   home: call('laser:home') as LaserApi['home'],
   fire: call('laser:fire') as LaserApi['fire'],
   stopFire: call('laser:stop-fire') as LaserApi['stopFire'],
+  jog: call('laser:jog') as LaserApi['jog'],
+  cancelJog: call('laser:cancel-jog') as LaserApi['cancelJog'],
   applySettings: call('laser:apply-settings') as LaserApi['applySettings'],
   loadSettings: call('laser:load-settings') as LaserApi['loadSettings'],
   materials: call('laser:materials') as LaserApi['materials'],

@@ -148,6 +148,7 @@ export interface Status {
   power: number;
   depth: number;
   fileId: string;
+  pos?: { x: number; y: number }; // head position in design mm (G-code lasers)
 }
 
 const hex = (bytes: Uint8Array | number[], sep = ' ') => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(sep);

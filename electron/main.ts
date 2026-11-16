@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DeviceSettings } from '../shared/lp2.ts';
@@ -37,9 +37,18 @@ const handle = <A extends unknown[], R>(channel: string, fn: (...args: A) => Pro
   ipcMain.handle(channel, (_e, ...args) => fn(...(args as A)));
 
 handle('laser:ports', () => laser.ports());
+handle('laser:state', () => laser.info);
 handle('laser:connect', (p: string, kind?: 'lp2' | 'grbl' | 'auto') => laser.connect(p, kind ?? 'auto'));
 handle('laser:disconnect', () => laser.disconnect());
-handle('laser:run', (jobs: JobSpec[]) => laser.run(jobs.map((j) => ({ ...j, file: new Uint8Array(j.file) }))));
+handle('laser:run', async (jobs: JobSpec[]) => {
+  // Keep Windows from sleeping mid-job (the screen may still turn off).
+  const blocker = powerSaveBlocker.start('prevent-app-suspension');
+  try {
+    return await laser.run(jobs.map((j) => ({ ...j, file: new Uint8Array(j.file) })));
+  } finally {
+    powerSaveBlocker.stop(blocker);
+  }
+});
 handle('laser:pause', () => laser.pause());
 handle('laser:resume', () => laser.resume());
 handle('laser:stop', () => laser.stop());
@@ -48,6 +57,8 @@ handle('laser:stop-preview', () => laser.stopPreview());
 handle('laser:home', (how?: 'origin' | 'zero' | 'cycle') => laser.home(how ?? 'origin'));
 handle('laser:fire', (spec: import('../shared/grbl.ts').FireSpec) => laser.fire(spec));
 handle('laser:stop-fire', () => laser.stopFire());
+handle('laser:jog', (move: { dx?: number; dy?: number; to?: { x: number; y: number } }, feed?: number) => laser.jog(move, feed));
+handle('laser:cancel-jog', () => laser.cancelJog());
 handle('laser:materials', () => loadMaterials());
 
 // ---------------------------------------------------------------- about and updates

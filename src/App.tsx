@@ -23,6 +23,9 @@ import { Workspace } from './Workspace.tsx';
 import { CameraDialog } from './CameraDialog.tsx';
 import { HelpDialog, HistoryDialog, LibraryDialog, WelcomeDialog } from './panels.tsx';
 import { thumbnail } from './thumbnail.ts';
+import { SimulateDialog } from './SimulateDialog.tsx';
+import { ArrayDialog, JogPad } from './tools.tsx';
+import { arrayCopies } from './arrayCopies.ts';
 import { FireDialog } from './FireDialog.tsx';
 import { DesignsPanel, MaterialsPanel } from './SidePanels.tsx';
 import { starterMaterials } from './starterMaterials.ts';
@@ -42,7 +45,8 @@ interface RunState {
   size?: number;
 }
 type LogLine = { level: string; message: string; at: string };
-type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome' | 'fire';
+type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome' | 'fire' | 'simulate' | 'array';
+const AIR_KEY = 'lightrunner.airAssist';
 const WATTS_KEY = 'lightrunner.laserWatts';
 const WELCOME_KEY = 'lightrunner.welcomed';
 const MACHINE_KEY = 'lightrunner.machine';
@@ -78,6 +82,15 @@ function download(name: string, text: string, type = 'text/plain') {
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 }
 
+/** A system notification (shown even when the window is behind others). */
+function notify(title: string, body: string) {
+  try {
+    new Notification(title, { body, silent: false });
+  } catch {
+    // notifications unavailable: the activity log still has it
+  }
+}
+
 const isTyping = (e: KeyboardEvent) => {
   const t = e.target as HTMLElement | null;
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
@@ -94,7 +107,7 @@ export function App() {
   FIELD.w = machine.bed.w;
   FIELD.h = machine.bed.h;
   const isGrbl = machine.kind === 'grbl';
-  const buildFor = (list: Item[]) => (isGrbl ? buildGrblJobs(list, machine.profile ?? { ...DEFAULT_PROFILE, bedW: machine.bed.w, bedH: machine.bed.h }) : buildJobs(list));
+  const buildFor = (list: Item[]) => (isGrbl ? buildGrblJobs(list, machine.profile ?? { ...DEFAULT_PROFILE, bedW: machine.bed.w, bedH: machine.bed.h }, { airAssist }) : buildJobs(list));
   const [device, setDevice] = useState<DeviceInfo | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [run, setRun] = useState<RunState>({ phase: 'idle' });
@@ -110,6 +123,8 @@ export function App() {
   const [watts, setWatts] = useState(() => Number(localStorage.getItem(WATTS_KEY)) || 10);
   const [designsKey, setDesignsKey] = useState(0);
   const [homeMenu, setHomeMenu] = useState(false);
+  const [jogOpen, setJogOpen] = useState(false);
+  const [airAssist, setAirAssist] = useState(() => localStorage.getItem(AIR_KEY) === '1');
   const [snap, setSnap] = useState(false);
   const [dialog, setDialog] = useState<DialogName>(null);
   const [pdf, setPdf] = useState<{ name: string; data: ArrayBuffer; pages: number } | null>(null);
@@ -158,6 +173,16 @@ export function App() {
 
   useEffect(() => {
     refreshPorts().catch(fail);
+    // After a window reload the laser may still be connected in the background.
+    laser
+      .state()
+      .then((info) => {
+        if (!info) return;
+        setDevice(info);
+        setMachine({ kind: info.kind, bed: info.bed, profile: info.profile });
+        setPort(info.path);
+      })
+      .catch(() => undefined);
     laser.materials().then(setLdsMaterials).catch(fail);
     laser.loadSettings().then(setSettings).catch(fail);
     laser
@@ -603,6 +628,7 @@ export function App() {
         await laser.run(jobs);
         if (batchStop.current) result = 'stopped';
         note(`Done in ${formatDuration((Date.now() - started) / 1000)}.`);
+        notify(batchStop.current ? 'Job stopped' : 'Job finished', `${jobs.length === 1 ? jobs[0].name : `${jobs.length} jobs`} · ${formatDuration((Date.now() - started) / 1000)}`);
       } catch (e) {
         result = 'failed';
         throw e;
@@ -805,6 +831,12 @@ export function App() {
           <button onClick={() => setDialog('grid')} title="A grid of power and depth settings to test a material">
             Test grid
           </button>
+          <button onClick={() => setDialog('simulate')} disabled={!visible.length} title="Play back the path the laser will take, without firing">
+            Simulate
+          </button>
+          <button onClick={() => setDialog('array')} disabled={!selItems.length} title="Copies of the selection in rows and columns">
+            Array
+          </button>
           <button onClick={() => setDialog('camera')} title="See the real object under your design (webcam or photo)">
             Camera
           </button>
@@ -837,6 +869,7 @@ export function App() {
             onMoveStart={history.checkpoint}
             onMove={(pos) => history.replace((l) => l.map((i) => (pos.has(i.id) ? { ...i, ...pos.get(i.id)! } : i)))}
             background={cameraBg?.show ? cameraBg : null}
+            head={isGrbl && device ? (status?.pos ?? null) : null}
           />
           {cameraBg && (
             <div className="camera-bar">
@@ -965,10 +998,12 @@ export function App() {
             <div style={{ width: `${Math.round(progress * 100)}%` }} />
           </div>
         </div>
-        <label className="bright" title="How bright the preview light is">
+        {!isGrbl && (
+          <label className="bright" title="How bright the preview light is">
           Preview light
           <input type="range" min="1" max="10" value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} />
         </label>
+        )}
         {run.phase === 'previewing' ? (
           <button onClick={() => laser.stopPreview().catch(fail)}>
             Stop preview
@@ -989,6 +1024,36 @@ export function App() {
                     </div>
                   )}
                 </div>
+                <div className="menu-wrap up">
+                  <button onClick={() => setJogOpen(!jogOpen)} disabled={!device} title="Move the head with the arrows">
+                    Jog
+                  </button>
+                  {jogOpen && (
+                    <JogPad
+                      pos={status?.pos ? { x: status.pos.x, y: (machine.profile?.originBottomLeft ?? true) ? FIELD.h - status.pos.y : status.pos.y } : null}
+                      busy={busy || working}
+                      canGoToSelection={!!selItems.length}
+                      onJog={(dx, dy) => laser.jog({ dx, dy }).catch(fail)}
+                      onGoTo={(x, y) => laser.jog({ to: { x, y } }).catch(fail)}
+                      onGoToSelection={() => {
+                        const b = boundsOf(selItems);
+                        if (b) laser.jog({ to: { x: b.x, y: b.y } }).catch(fail);
+                      }}
+                      onClose={() => setJogOpen(false)}
+                    />
+                  )}
+                </div>
+                <label className="check" title="Turn air assist on (M8) for the whole job">
+                  <input
+                    type="checkbox"
+                    checked={airAssist}
+                    onChange={(e) => {
+                      setAirAssist(e.target.checked);
+                      localStorage.setItem(AIR_KEY, e.target.checked ? '1' : '0');
+                    }}
+                  />{' '}
+                  Air
+                </label>
                 <button className="danger" onClick={() => setDialog('fire')} disabled={!device || busy || working} title="Test fire the laser (beam or strobe)">
                   Fire laser…
                 </button>
@@ -1072,6 +1137,20 @@ export function App() {
             setDialog(null);
             if (run.phase === 'previewing') laser.stopPreview().catch(() => undefined);
             note('The photo is under your design. Line the design up with the object, then Preview to check.');
+          }}
+        />
+      )}
+      {dialog === 'simulate' && <SimulateDialog items={visible} machine={machine.kind} onClose={() => setDialog(null)} />}
+      {dialog === 'array' && selItems.length > 0 && (
+        <ArrayDialog
+          items={selItems}
+          onCancel={() => setDialog(null)}
+          onMake={(rows, cols, gapX, gapY) => {
+            const copies = arrayCopies(selItems, rows, cols, gapX, gapY);
+            history.commit((l) => [...l, ...copies]);
+            setSelection([...selection, ...copies.map((c) => c.id)]);
+            setDialog(null);
+            note(`Made ${copies.length} cop${copies.length === 1 ? 'y' : 'ies'} (${rows} × ${cols}).`);
           }}
         />
       )}

@@ -47,16 +47,24 @@ export interface RasterOp {
 
 export type Op = VectorOp | RasterOp;
 
+export interface JobOptions {
+  airAssist?: boolean; // M8 on for the job, M9 off at the end
+  returnHome?: boolean; // G0 X0 Y0 at the end (default true)
+}
+
 /** G-code for a set of operations, in GRBL laser mode (M4: power follows speed, off on G0). */
-export function gcodeFor(ops: Op[], p: MachineProfile): string {
+export function gcodeFor(ops: Op[], p: MachineProfile, opts: JobOptions = {}): string {
   const out: string[] = ['; Light Runner', 'G21', 'G90', 'M4 S0'];
+  if (opts.airAssist) out.push('M8');
   for (const op of ops) {
     for (let pass = 0; pass < Math.max(1, op.passes); pass++) {
       if (op.kind === 'vector') vectorLines(op, p, out);
       else rasterLines(op, p, out);
     }
   }
-  out.push('M5 S0', 'G0 X0 Y0');
+  out.push('M5 S0');
+  if (opts.airAssist) out.push('M9');
+  if (opts.returnHome !== false) out.push('G0 X0 Y0');
   return out.join('\n') + '\n';
 }
 

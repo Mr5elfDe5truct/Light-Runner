@@ -105,6 +105,8 @@ export interface LaserApi {
   checkUpdate(): Promise<{ current: string; latest: string | null; url: string | null; newer: boolean; note?: string }>;
   openUrl(url: string): Promise<void>;
   ports(): Promise<PortInfo[]>;
+  /** The laser that's connected now, if any. */
+  state(): Promise<DeviceInfo | null>;
   connect(path: string, kind?: MachineKind | 'auto'): Promise<DeviceInfo>;
   disconnect(): Promise<void>;
   run(jobs: JobSpec[]): Promise<void>;
@@ -116,6 +118,8 @@ export interface LaserApi {
   home(how?: 'origin' | 'zero' | 'cycle'): Promise<void>;
   fire(spec: import('./grbl.ts').FireSpec): Promise<void>;
   stopFire(): Promise<void>;
+  jog(move: { dx?: number; dy?: number; to?: { x: number; y: number } }, feed?: number): Promise<void>;
+  cancelJog(): Promise<void>;
   applySettings(settings: DeviceSettings): Promise<void>;
   loadSettings(): Promise<DeviceSettings>;
   onEvent(listener: (event: LaserEvent) => void): () => void;

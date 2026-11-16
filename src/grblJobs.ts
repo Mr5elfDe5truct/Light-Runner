@@ -1,5 +1,5 @@
 /** Jobs for GRBL lasers: one G-code program per item. */
-import { gcodeFor, type MachineProfile, type Op } from '../shared/grbl.ts';
+import { gcodeFor, type JobOptions, type MachineProfile, type Op } from '../shared/grbl.ts';
 import { pixelsPerMm } from '../shared/lp2.ts';
 import type { JobSpec } from '../shared/types.ts';
 import { itemBounds, placedPaths } from './geometry.ts';
@@ -10,7 +10,7 @@ import { emptyMask, fillPaths } from './raster.ts';
 export const DEFAULT_SPEED = 1500; // mm/min
 export const speedOf = (i: Item) => i.speed ?? DEFAULT_SPEED;
 
-async function opFor(item: Item): Promise<Op> {
+export async function opFor(item: Item): Promise<Op> {
   const box = itemBounds(item);
   const base = { power: item.power, speed: speedOf(item), passes: item.passes };
   if (item.kind === 'vector' && item.mode === 'line') return { kind: 'vector', paths: placedPaths(item), ...base };
@@ -30,21 +30,26 @@ async function opFor(item: Item): Promise<Op> {
   return { kind: 'raster', pixels, width: p.width, height: p.height, x: box.x, y: box.y, pixelMm, ...base };
 }
 
-export async function buildGrblJobs(items: Item[], profile: MachineProfile): Promise<JobSpec[]> {
-  const jobs: JobSpec[] = [];
-  for (const item of items) {
-    const box = itemBounds(item);
-    jobs.push({
-      name: item.name,
+/**
+ * One program for everything, in layer order (each item keeps its own power, speed and passes),
+ * so the head goes from one item to the next and only returns home once at the end.
+ */
+export async function buildGrblJobs(items: Item[], profile: MachineProfile, opts: JobOptions = {}): Promise<JobSpec[]> {
+  if (!items.length) return [];
+  const ops: Op[] = [];
+  for (const item of items) ops.push(await opFor(item));
+  const box = itemBounds(items[0]);
+  return [
+    {
+      name: items.length === 1 ? items[0].name : `${items.length} items`,
       file: new Uint8Array(0),
-      gcode: gcodeFor([await opFor(item)], profile),
-      power: item.power,
-      depth: item.depth,
-      passes: item.passes,
+      gcode: gcodeFor(ops, profile, opts),
+      power: items[0].power,
+      depth: items[0].depth,
+      passes: items[0].passes,
       xMm: Math.floor(box.x),
       yMm: Math.floor(box.y),
       dithered: false,
-    });
-  }
-  return jobs;
+    },
+  ];
 }

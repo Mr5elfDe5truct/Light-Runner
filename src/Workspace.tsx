@@ -18,6 +18,7 @@ interface Props {
   onMoveStart: () => void;
   onMove: (positions: Map<string, { x: number; y: number }>) => void;
   background?: { url: string; opacity: number } | null;
+  head?: { x: number; y: number } | null; // live laser head position (G-code lasers)
 }
 
 const transformOf = (i: Item) => {
@@ -31,7 +32,7 @@ type Gesture =
   | { kind: 'pan'; x: number; y: number; cx: number; cy: number; moved: boolean }
   | { kind: 'box'; start: { x: number; y: number }; now: { x: number; y: number }; additive: boolean };
 
-export function Workspace({ items, previews, selected, snap, onSelect, onMoveStart, onMove, background }: Props) {
+export function Workspace({ items, previews, selected, snap, onSelect, onMoveStart, onMove, background, head }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const FW = FIELD.w;
   const FH = FIELD.h;
@@ -204,6 +205,13 @@ export function Workspace({ items, previews, selected, snap, onSelect, onMoveSta
               </g>
             );
           })}
+        {head && (
+          <g className="head" pointerEvents="none">
+            <circle cx={head.x} cy={head.y} r={Math.max(FW, FH) * 0.012} />
+            <line x1={head.x - Math.max(FW, FH) * 0.03} y1={head.y} x2={head.x + Math.max(FW, FH) * 0.03} y2={head.y} />
+            <line x1={head.x} y1={head.y - Math.max(FW, FH) * 0.03} x2={head.x} y2={head.y + Math.max(FW, FH) * 0.03} />
+          </g>
+        )}
         {box && (
           <rect
             className="marquee"

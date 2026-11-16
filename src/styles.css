@@ -230,3 +230,15 @@ table.history td { white-space: nowrap; }
 .design .thumb img { width: 64px; height: 64px; border-radius: 4px; display: block; }
 .design-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-items: flex-start; }
 .menu-wrap.up .menu { left: 0; top: auto; bottom: calc(100% + 6px); min-width: 230px; }
+
+/* Live head position, Simulate, jog pad */
+.head circle { fill: rgba(255, 77, 46, 0.85); stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.head line { stroke: #ff4d2e; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.sim-stage { position: relative; align-self: center; border: 1px solid var(--line); }
+.sim-stage canvas { position: absolute; inset: 0; }
+.sim-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #666; }
+.jog { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 10; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 210px; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4); }
+.jog-head { display: flex; align-items: center; gap: 8px; }
+.jog-head .hint { flex: 1; font-family: Consolas, monospace; font-size: 12px; }
+.jog-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.jog-grid button { padding: 8px 0; font-size: 15px; }
