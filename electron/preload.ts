@@ -33,6 +33,8 @@ const api: LaserApi = {
     load: call('library:load') as LaserApi['library']['load'],
     remove: call('library:remove') as LaserApi['library']['remove'],
     rename: call('library:rename') as LaserApi['library']['rename'],
+    pickFolder: call('library:pick-folder') as LaserApi['library']['pickFolder'],
+    readFile: call('library:read-file') as LaserApi['library']['readFile'],
   },
   history: {
     list: call('history:list') as LaserApi['history']['list'],

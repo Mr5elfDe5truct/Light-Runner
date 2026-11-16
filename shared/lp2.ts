@@ -213,14 +213,22 @@ export function gcodeForPaths(paths: Point[][], depth: number): string {
   return lines.join('\n') + '\n';
 }
 
-export function gcodeBounds(gcode: string): { x0: number; y0: number; x1: number; y1: number } {
-  const xs: number[] = [];
-  const ys: number[] = [];
-  for (const m of gcode.matchAll(/X(-?[\d.]+) Y(-?[\d.]+)/g)) {
-    xs.push(Number(m[1]));
-    ys.push(Number(m[2]));
+/** The smallest box around some points. A loop, not Math.min(...points): big designs have more points than the call stack allows. */
+export function extent(points: Iterable<Point>): { x0: number; y0: number; x1: number; y1: number } {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of points) {
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
   }
-  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+  return { x0, y0, x1, y1 };
+}
+
+export function gcodeBounds(gcode: string): { x0: number; y0: number; x1: number; y1: number } {
+  const pts: Point[] = [];
+  for (const m of gcode.matchAll(/X(-?[\d.]+) Y(-?[\d.]+)/g)) pts.push([Number(m[1]), Number(m[2])]);
+  return extent(pts);
 }
 
 const concat = (head: number[], data: Uint8Array) => {

@@ -2,7 +2,7 @@
  * Offsetting outlines and combining shapes. Works by drawing the shapes into a fine pixel grid,
  * growing/shrinking/combining there, then tracing the result back into outlines.
  */
-import type { Point } from '../shared/lp2.ts';
+import { extent, type Point } from '../shared/lp2.ts';
 import { boundsOf, placedPaths } from './geometry.ts';
 import { DEFAULTS, newId, type VectorItem } from './model.ts';
 import { combineMasks, emptyMask, fillPaths, offsetMask, strokePaths, type BooleanOp, type Mask } from './raster.ts';
@@ -45,11 +45,8 @@ function itemFromMask(mask: Mask, g: Grid, name: string, like: VectorItem): Vect
   const loops = traceContours(mask.data, mask.width, mask.height, 0.6).filter((l) => l.length > 3);
   if (!loops.length) throw new Error('Nothing is left after that.');
   const paths = loops.map((l) => l.map(([x, y]) => [g.x0 + x / g.ppm, g.y0 + y / g.ppm] as Point));
-  const all = paths.flat();
-  const x = Math.min(...all.map((p) => p[0]));
-  const y = Math.min(...all.map((p) => p[1]));
-  const w = Math.max(...all.map((p) => p[0])) - x;
-  const h = Math.max(...all.map((p) => p[1])) - y;
+  const e = extent(paths.flat());
+  const [x, y, w, h] = [e.x0, e.y0, e.x1 - e.x0, e.y1 - e.y0];
   return {
     ...DEFAULTS,
     id: newId(),

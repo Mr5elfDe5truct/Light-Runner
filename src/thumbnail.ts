@@ -3,17 +3,24 @@ import { placedPaths } from './geometry.ts';
 import { loadImage } from './imaging.ts';
 import type { Item } from './model.ts';
 
-export async function thumbnail(items: Item[], previews: Record<string, string>, size = 240): Promise<string> {
+export async function thumbnail(items: Item[], previews: Record<string, string>, size = 240, type: 'image/png' | 'image/jpeg' = 'image/png'): Promise<string> {
   const c = document.createElement('canvas');
   c.width = size;
   c.height = size;
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = '#f7f7f4';
   ctx.fillRect(0, 0, size, size);
-  const k = size / 100;
+  // Fit the design's own bounds (it may be anywhere on a big work area), with a small margin.
+  const xs = items.flatMap((i) => [i.x, i.x + i.w]);
+  const ys = items.flatMap((i) => [i.y, i.y + i.h]);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1) * 1.1;
+  const ox = Math.min(...xs) - (span - (Math.max(...xs) - Math.min(...xs))) / 2;
+  const oy = Math.min(...ys) - (span - (Math.max(...ys) - Math.min(...ys))) / 2;
+  const k = size / span;
+  ctx.translate(-ox * k, -oy * k);
   for (const item of items.filter((i) => i.visible)) {
     if (item.kind === 'image') {
-      const url = previews[item.id];
+      const url = previews[item.id] ?? item.src;
       if (!url) continue;
       try {
         const img = await loadImage(url);
@@ -39,5 +46,5 @@ export async function thumbnail(items: Item[], previews: Record<string, string>,
       }
     }
   }
-  return c.toDataURL('image/png');
+  return c.toDataURL(type, 0.8);
 }

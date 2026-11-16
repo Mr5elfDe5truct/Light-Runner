@@ -242,3 +242,6 @@ table.history td { white-space: nowrap; }
 .jog-head .hint { flex: 1; font-family: Consolas, monospace; font-size: 12px; }
 .jog-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .jog-grid button { padding: 8px 0; font-size: 15px; }
+.import-progress { display: flex; flex-direction: column; gap: 4px; }
+.progress.wide { max-width: none; width: 100%; height: 8px; }
+.failed { max-height: 20vh; overflow-y: auto; font-size: 12px; color: var(--muted); }

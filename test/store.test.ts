@@ -17,12 +17,35 @@ test('library: save, list newest first, rename, load, delete', async () => {
     assert.deepEqual(list.map((e) => e.name), ['Keyring', 'Coaster']);
     assert.equal(list[1].items, 2);
     await s.renameInLibrary(a, 'Round coaster');
-    assert.deepEqual(await s.loadFromLibrary(a), { items: [1, 2] });
+    assert.deepEqual((await s.loadFromLibrary(a)).design, { items: [1, 2] });
     await s.saveToLibrary('Keyring v2', { items: [1, 2, 3] }, 'data:b2', b); // overwrite in place
     assert.equal((await s.listLibrary()).length, 2);
     await s.deleteFromLibrary(a);
     assert.deepEqual((await s.listLibrary()).map((e) => e.name), ['Keyring v2']);
     await assert.rejects(s.loadFromLibrary('../../etc'), /Bad id/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('library: imported designs keep their file and folder; the index survives a restart', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'lr-index-'));
+  try {
+    const s = new Store(dir);
+    const source = { kind: 'svg' as const, name: 'Coaster 1', text: '<svg/>' };
+    const id = await s.saveToLibrary('Coaster 1', null, 'data:t', undefined, { folder: 'EXTRAs_2/Coasters', source });
+    await s.saveToLibrary('Mine', { items: [1, 2, 3] }, 'data:m');
+    assert.deepEqual(await s.loadFromLibrary(id), { design: undefined, source });
+    await s.flush();
+    // A fresh store (the app restarted) lists from the index, folder included.
+    const again = new Store(dir);
+    const list = await again.listLibrary();
+    assert.equal(list.length, 2);
+    assert.equal(list.find((e) => e.id === id)!.folder, 'EXTRAs_2/Coasters');
+    assert.equal(list.find((e) => e.name === 'Mine')!.items, 3);
+    await again.deleteFromLibrary(id);
+    await again.flush();
+    assert.equal((await new Store(dir).listLibrary()).length, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

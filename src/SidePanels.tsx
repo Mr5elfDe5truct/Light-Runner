@@ -113,20 +113,27 @@ export function MaterialsPanel({ machine, materials, watts, onWatts, selectedCou
 }
 
 interface DesignsProps {
+  onImportFolder: () => void;
   currentId: string | null;
   onOpen: (id: string, name: string) => void;
   onSave: (name: string, id?: string) => Promise<void>;
   refreshKey: number;
 }
 
-export function DesignsPanel({ currentId, onOpen, onSave, refreshKey }: DesignsProps) {
+export function DesignsPanel({ currentId, onOpen, onSave, refreshKey, onImportFolder }: DesignsProps) {
   const [list, setList] = useState<LibraryEntry[] | null>(null);
   const [name, setName] = useState('');
+  const [query, setQuery] = useState('');
+  const [folder, setFolder] = useState('');
+  const [shown, setShown] = useState(40);
   const refresh = () => window.laser.library.list().then(setList).catch(() => setList([]));
   useEffect(() => {
     refresh();
   }, [refreshKey]);
   const current = list?.find((e) => e.id === currentId);
+  const folders = useMemo(() => [...new Set((list ?? []).map((e) => e.folder ?? ''))].sort((a, b) => a.localeCompare(b)), [list]);
+  const q = query.trim().toLowerCase();
+  const matches = (list ?? []).filter((e) => (!folder || (e.folder ?? '') === folder) && (!q || e.name.toLowerCase().includes(q) || (e.folder ?? '').toLowerCase().includes(q)));
   return (
     <div className="panel">
       <div className="row">
@@ -140,8 +147,24 @@ export function DesignsPanel({ currentId, onOpen, onSave, refreshKey }: DesignsP
           Update "{current.name}"
         </button>
       )}
+      <div className="row">
+        <input type="text" className="grow" placeholder={`Search ${list?.length ?? ''} designs`} value={query} onChange={(e) => (setQuery(e.target.value), setShown(40))} />
+        <button className="small" onClick={onImportFolder} title="Add every design in a folder to My designs">
+          Import a folder…
+        </button>
+      </div>
+      {folders.length > 1 && (
+        <select value={folder} onChange={(e) => (setFolder(e.target.value), setShown(40))}>
+          <option value="">All folders</option>
+          {folders.map((f) => (
+            <option key={f} value={f}>
+              {f || 'Made in Light Runner'} ({(list ?? []).filter((e) => (e.folder ?? '') === f).length})
+            </option>
+          ))}
+        </select>
+      )}
       <div className="designs">
-        {list?.map((e) => (
+        {matches.slice(0, shown).map((e) => (
           <div key={e.id} className={`design ${e.id === currentId ? 'on' : ''}`}>
             <button className="thumb" onClick={() => onOpen(e.id, e.name)} title="Open">
               <img src={e.thumbnail} alt="" />
@@ -150,7 +173,7 @@ export function DesignsPanel({ currentId, onOpen, onSave, refreshKey }: DesignsP
               <div className="card-name" title={e.name}>
                 {e.name}
               </div>
-              <div className="hint small">{new Date(e.updated).toLocaleDateString()}</div>
+              <div className="hint small">{e.folder ? e.folder.split('/').slice(-1)[0] : new Date(e.updated).toLocaleDateString()}</div>
               <button
                 className="small danger"
                 onClick={() => {
@@ -162,7 +185,13 @@ export function DesignsPanel({ currentId, onOpen, onSave, refreshKey }: DesignsP
             </div>
           </div>
         ))}
-        {list?.length === 0 && <p className="hint">Nothing saved yet. Name the design above and press Save.</p>}
+        {matches.length > shown && (
+          <button className="small" onClick={() => setShown(shown + 60)}>
+            Show more ({matches.length - shown} left)
+          </button>
+        )}
+        {list?.length === 0 && <p className="hint">Nothing saved yet. Name the design above and press Save, or import a folder of designs.</p>}
+        {!!list?.length && !matches.length && <p className="hint">No designs match.</p>}
       </div>
     </div>
   );

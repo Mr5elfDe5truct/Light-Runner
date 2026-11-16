@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron';
-import { readFile, writeFile } from 'node:fs/promises';
+import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, shell } from 'electron';
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DeviceSettings } from '../shared/lp2.ts';
-import type { JobSpec, LaserEvent, PreviewSpec } from '../shared/types.ts';
+import type { DesignSource, FolderFile, JobSpec, LaserEvent, PreviewSpec } from '../shared/types.ts';
 import { Machines } from './machines.ts';
 import { loadMaterials } from './materials.ts';
 import { Store } from './store.ts';
@@ -89,7 +89,45 @@ handle('app:open-url', (url: string) => {
 let store: Store | null = null;
 const st = () => (store ??= new Store(app.getPath('userData')));
 handle('library:list', () => st().listLibrary());
-handle('library:save', (name: string, design: unknown, thumb: string, id?: string) => st().saveToLibrary(name, design, thumb, id));
+handle('library:save', (name: string, design: unknown, thumb: string, id?: string, extra?: { folder?: string; source?: DesignSource }) => st().saveToLibrary(name, design, thumb, id, extra));
+
+// Importing a folder: the person picks it, then only files inside folders they picked can be read.
+const pickedRoots = new Set<string>();
+const KINDS: Record<string, FolderFile['kind']> = { svg: 'svg', dxf: 'dxf', gcode: 'gcode', nc: 'gcode', gc: 'gcode', ngc: 'gcode', png: 'image', jpg: 'image', jpeg: 'image', bmp: 'image', webp: 'image', lbrn: 'unsupported', lbrn2: 'unsupported' };
+handle('library:pick-folder', async () => {
+  const r = await dialog.showOpenDialog(win!, { title: 'Choose a folder of designs', properties: ['openDirectory'] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const root = r.filePaths[0];
+  pickedRoots.add(path.resolve(root));
+  const base = path.dirname(root);
+  const files: FolderFile[] = [];
+  const walk = async (dir: string, depth: number) => {
+    if (depth > 8 || files.length > 20000) return;
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(full, depth + 1);
+      else {
+        const ext = path.extname(entry.name).slice(1).toLowerCase();
+        const kind = KINDS[ext];
+        if (!kind) continue;
+        files.push({ path: full, name: path.basename(entry.name, path.extname(entry.name)), folder: path.relative(base, dir).split(path.sep).join('/'), kind, ext, size: (await stat(full)).size });
+      }
+    }
+  };
+  await walk(root, 0);
+  return { root, files };
+});
+handle('library:read-file', async (file: string) => {
+  const full = path.resolve(file);
+  if (![...pickedRoots].some((r) => full === r || full.startsWith(r + path.sep))) throw new Error('That file is outside the folder you chose.');
+  const ext = path.extname(full).slice(1).toLowerCase();
+  if (KINDS[ext] === 'image') {
+    const mime = ext === 'jpg' ? 'jpeg' : ext;
+    return { dataUrl: `data:image/${mime};base64,${(await readFile(full)).toString('base64')}` };
+  }
+  if ((await stat(full)).size > 20 * 1024 * 1024) throw new Error('That file is over 20 MB.');
+  return { text: await readFile(full, 'utf8') };
+});
 handle('library:load', (id: string) => st().loadFromLibrary(id));
 handle('library:remove', (id: string) => st().deleteFromLibrary(id));
 handle('library:rename', (id: string, name: string) => st().renameInLibrary(id, name));
@@ -117,6 +155,7 @@ handle('laser:apply-settings', async (s: DeviceSettings) => {
 if (!app.isPackaged && !process.env.LR_GRBL_LOG) process.env.LR_GRBL_LOG = path.join(app.getPath('temp'), 'light-runner-grbl.log');
 app.whenReady().then(createWindow);
 app.on('window-all-closed', async () => {
+  await store?.flush().catch(() => undefined);
   if (laser.connected) await laser.stop().catch(() => undefined);
   await laser.disconnect();
   app.quit();

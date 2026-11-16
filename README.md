@@ -93,7 +93,7 @@ without LaserPecker Design Space. It also drives **G-code (GRBL) diode lasers**,
 - Single-line text **around a circle**.
 
 **Library and help**
-- **My designs**: saved designs with thumbnails. **Job history**: the last 50 jobs, with Run again.
+- **My designs**: saved designs with thumbnails, search and a folder filter. **Import a folder…** adds every SVG, DXF and G-code file in a folder and its subfolders (pictures optional), grouped by folder; running it again skips what's already there. Files stay on this PC. **Job history**: the last 50 jobs, with Run again.
 - Export and import your own materials to share or back up.
 - A first-run guide, Help with troubleshooting, a light theme, and full keyboard use.
 - About shows the version and checks GitHub for newer releases.

@@ -1,6 +1,6 @@
 {
   "name": "light-runner",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Design and engrave on the LaserPecker LP2 without LaserPecker Design Space.",
   "type": "module",

@@ -23,6 +23,8 @@ import { Workspace } from './Workspace.tsx';
 import { CameraDialog } from './CameraDialog.tsx';
 import { HelpDialog, HistoryDialog, LibraryDialog, WelcomeDialog } from './panels.tsx';
 import { thumbnail } from './thumbnail.ts';
+import { itemsFromSource } from './folderImport.ts';
+import { ImportFolderDialog } from './ImportFolderDialog.tsx';
 import { SimulateDialog } from './SimulateDialog.tsx';
 import { ArrayDialog, JogPad } from './tools.tsx';
 import { arrayCopies } from './arrayCopies.ts';
@@ -45,7 +47,7 @@ interface RunState {
   size?: number;
 }
 type LogLine = { level: string; message: string; at: string };
-type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome' | 'fire' | 'simulate' | 'array';
+type DialogName = null | 'text' | 'settings' | 'grid' | 'material' | 'shapes' | 'code' | 'about' | 'batch' | 'camera' | 'library' | 'history' | 'help' | 'welcome' | 'fire' | 'simulate' | 'array' | 'importFolder';
 const AIR_KEY = 'lightrunner.airAssist';
 const WATTS_KEY = 'lightrunner.laserWatts';
 const WELCOME_KEY = 'lightrunner.welcomed';
@@ -545,10 +547,12 @@ export function App() {
 
   const openDesign = async (id: string, name: string) => {
     try {
-      const design = (await laser.library.load(id)) as { items: Item[] };
-      history.commit(design.items.map(normalizeItem));
+      const stored = await laser.library.load(id);
+      const loaded = stored.source ? await itemsFromSource(stored.source) : ((stored.design as { items: Item[] }).items ?? []).map(normalizeItem);
+      history.commit(loaded);
       setSelection([]);
-      setLibraryId(id);
+      // An imported design opens as a new one (saving makes your own copy).
+      setLibraryId(stored.source ? null : id);
       setDialog(null);
       note(`Opened "${name}".`);
     } catch (e) {
@@ -914,7 +918,7 @@ export function App() {
               onImport={() => materialsInput.current?.click()}
             />
           )}
-          {sideTab === 'designs' && <DesignsPanel currentId={libraryId} onOpen={openDesign} onSave={saveDesign} refreshKey={designsKey} />}
+          {sideTab === 'designs' && <DesignsPanel currentId={libraryId} onOpen={openDesign} onSave={saveDesign} refreshKey={designsKey} onImportFolder={() => setDialog('importFolder')} />}
           {sideTab === 'layers' && (
           <>
           <h3>Engrave order</h3>
@@ -1140,6 +1144,7 @@ export function App() {
           }}
         />
       )}
+      {dialog === 'importFolder' && <ImportFolderDialog onClose={() => setDialog(null)} onDone={() => setDesignsKey((k) => k + 1)} />}
       {dialog === 'simulate' && <SimulateDialog items={visible} machine={machine.kind} onClose={() => setDialog(null)} />}
       {dialog === 'array' && selItems.length > 0 && (
         <ArrayDialog
@@ -1170,6 +1175,7 @@ export function App() {
           onOpen={openDesign}
           onExportMaterials={() => download('my-materials.lightrunner-materials.json', JSON.stringify({ app: 'Light Runner materials', version: 1, materials: myMaterials }, null, 1), 'application/json')}
           onImportMaterials={() => materialsInput.current?.click()}
+          onImportFolder={() => setDialog('importFolder')}
         />
       )}
       {dialog === 'history' && (

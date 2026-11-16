@@ -1,5 +1,5 @@
 /** Placing items on the field: rotation, flips, bounds. Pure functions. */
-import type { Point } from '../shared/lp2.ts';
+import { extent, type Point } from '../shared/lp2.ts';
 import { FIELD, type Item, type VectorItem } from './model.ts';
 
 export interface Box {
@@ -34,11 +34,8 @@ export function itemBounds(item: Item): Box {
 }
 
 export function boundsOfPoints(points: Point[]): Box {
-  const xs = points.map((p) => p[0]);
-  const ys = points.map((p) => p[1]);
-  const x = Math.min(...xs);
-  const y = Math.min(...ys);
-  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  const e = extent(points);
+  return { x: e.x0, y: e.y0, w: e.x1 - e.x0, h: e.y1 - e.y0 };
 }
 
 /** An outline's paths in field millimetres, with size, flips and rotation applied. */

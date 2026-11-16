@@ -1,5 +1,5 @@
 /** Readers for DXF drawings and G-code files, into polylines in millimetres (y down). Pure. */
-import type { Point } from '../shared/lp2.ts';
+import { extent, type Point } from '../shared/lp2.ts';
 
 export interface Outline {
   paths: Point[][];
@@ -11,11 +11,7 @@ export interface Outline {
 export function normalizePaths(paths: Point[][]): Outline {
   const kept = paths.filter((p) => p.length > 1);
   if (!kept.length) throw new Error('No lines were found in that file.');
-  const all = kept.flat();
-  const x0 = Math.min(...all.map((p) => p[0]));
-  const y0 = Math.min(...all.map((p) => p[1]));
-  const x1 = Math.max(...all.map((p) => p[0]));
-  const y1 = Math.max(...all.map((p) => p[1]));
+  const { x0, y0, x1, y1 } = extent(kept.flat());
   return {
     paths: kept.map((p) => p.map(([x, y]) => [x - x0, y - y0] as Point)),
     width: Math.max(0.1, x1 - x0),

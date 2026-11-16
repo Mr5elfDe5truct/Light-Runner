@@ -1,5 +1,6 @@
 /** Reads an SVG into polylines (millimetres), sampling every shape the browser can measure. */
 import type { Point } from '../shared/lp2.ts';
+import { flattenPathData } from '../shared/svgPath.ts';
 
 const UNIT_MM: Record<string, number> = { mm: 1, cm: 10, in: 25.4, pt: 25.4 / 72, pc: 25.4 / 6, px: 25.4 / 96, '': 25.4 / 96 };
 const SHAPES = 'path, rect, circle, ellipse, line, polyline, polygon';
@@ -40,6 +41,25 @@ export function readSvg(text: string): VectorImport {
     const paths: Point[][] = [];
     for (const el of svg.querySelectorAll<SVGGeometryElement>(SHAPES)) {
       if (el.closest('defs, clipPath, mask, symbol')) continue;
+      if (el.tagName.toLowerCase() === 'path') {
+        // Flatten the path data ourselves: linear time, where getPointAtLength is quadratic.
+        const ctm = el.getScreenCTM();
+        const m = ctm && toRoot ? toRoot.multiply(ctm) : null;
+        const scale = m ? Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1 : 1;
+        try {
+          for (const sub of flattenPathData(el.getAttribute('d') ?? '', 0.1 / mmPerUnit / scale)) {
+            const pts = sub.map(([px, py]): Point => {
+              const x = m ? m.a * px + m.c * py + m.e : px;
+              const y = m ? m.b * px + m.d * py + m.f : py;
+              return [(x - ox) * mmPerUnit, (y - oy) * mmPerUnit];
+            });
+            paths.push(simplify(pts, 0.02));
+          }
+          continue;
+        } catch {
+          // Unusual path data: fall back to the browser's own measuring below.
+        }
+      }
       let total: number;
       try {
         total = el.getTotalLength();
@@ -70,12 +90,17 @@ export function readSvg(text: string): VectorImport {
     if (!paths.length) throw new Error('No shapes with outlines were found in that SVG.');
 
     // Shift to start at 0,0 and report the real size.
-    const xs = paths.flat().map((p) => p[0]);
-    const ys = paths.flat().map((p) => p[1]);
-    const x0 = Math.min(...xs);
-    const y0 = Math.min(...ys);
+    // (A loop, not Math.min(...all): big files have more points than the call stack allows.)
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of paths)
+      for (const [x, y] of p) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
     const shifted = paths.map((p) => p.map(([x, y]) => [x - x0, y - y0] as Point));
-    return { paths: shifted, width: Math.max(0.1, Math.max(...xs) - x0), height: Math.max(0.1, Math.max(...ys) - y0) };
+    return { paths: shifted, width: Math.max(0.1, x1 - x0), height: Math.max(0.1, y1 - y0) };
   } finally {
     host.remove();
   }

@@ -13,7 +13,9 @@ export function LibraryDialog({
   onClose,
   onExportMaterials,
   onImportMaterials,
+  onImportFolder,
 }: {
+  onImportFolder: () => void;
   currentId: string | null;
   onOpen: (id: string, name: string) => void;
   onSave: (name: string, id?: string) => Promise<void>;
@@ -24,6 +26,9 @@ export function LibraryDialog({
   const [list, setList] = useState<LibraryEntry[] | null>(null);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [folder, setFolder] = useState('');
+  const [shown, setShown] = useState(60);
   const refresh = () => window.laser.library.list().then(setList).catch((e) => setError(e.message));
   useEffect(() => {
     refresh();
@@ -43,10 +48,27 @@ export function LibraryDialog({
         </button>
       </div>
       {error && <p className="warn">{error}</p>}
+      <div className="row">
+        <input type="text" className="grow" placeholder={`Search ${list?.length ?? ''} designs`} value={query} onChange={(e) => (setQuery(e.target.value), setShown(60))} />
+        <select value={folder} onChange={(e) => (setFolder(e.target.value), setShown(60))}>
+          <option value="">All folders</option>
+          {[...new Set((list ?? []).map((e) => e.folder ?? ''))]
+            .sort((a, b) => a.localeCompare(b))
+            .map((f) => (
+              <option key={f} value={f}>
+                {f || 'Made in Light Runner'}
+              </option>
+            ))}
+        </select>
+        <button onClick={onImportFolder}>Import a folder…</button>
+      </div>
       <div className="library">
         {list === null && <p className="hint">Loading…</p>}
-        {list?.length === 0 && <p className="hint">Nothing saved yet. Name your design above and press Save.</p>}
-        {list?.map((e) => (
+        {list?.length === 0 && <p className="hint">Nothing saved yet. Name your design above and press Save, or import a folder of designs.</p>}
+        {(list ?? [])
+          .filter((e) => (!folder || (e.folder ?? '') === folder) && (!query.trim() || `${e.name} ${e.folder ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())))
+          .slice(0, shown)
+          .map((e) => (
           <div key={e.id} className={`card ${e.id === currentId ? 'on' : ''}`}>
             <button className="thumb" onClick={() => onOpen(e.id, e.name)} title="Open this design">
               <img src={e.thumbnail} alt="" />
@@ -55,7 +77,7 @@ export function LibraryDialog({
               {e.name}
             </div>
             <div className="hint small">
-              {when(e.updated)} · {e.items} item{e.items === 1 ? '' : 's'}
+              {e.folder ? e.folder : `${when(e.updated)} · ${e.items} item${e.items === 1 ? '' : 's'}`}
             </div>
             <div className="row">
               <button
@@ -70,6 +92,11 @@ export function LibraryDialog({
           </div>
         ))}
       </div>
+      {(list?.length ?? 0) > shown && (
+        <button className="small" onClick={() => setShown(shown + 120)}>
+          Show more
+        </button>
+      )}
       <div className="buttons">
         <button onClick={onExportMaterials} title="Save your ★ materials to a file to share or back up">
           Export my materials

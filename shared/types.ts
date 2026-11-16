@@ -72,6 +72,25 @@ export interface LibraryEntry {
   updated: number;
   thumbnail: string;
   items: number;
+  folder?: string; // where it was imported from, e.g. "EXTRAs_2/Coasters"
+}
+
+/** The original file a design was imported from (read when it's opened). */
+export interface DesignSource {
+  kind: 'svg' | 'dxf' | 'gcode' | 'image';
+  name: string;
+  text?: string; // svg, dxf, gcode
+  dataUrl?: string; // image
+}
+
+/** A design file found when importing a folder. */
+export interface FolderFile {
+  path: string;
+  name: string; // without the extension
+  folder: string; // relative to the parent of the folder chosen, e.g. "EXTRAs_2/Coasters"
+  kind: DesignSource['kind'] | 'unsupported';
+  ext: string;
+  size: number;
 }
 
 export interface HistoryEntry {
@@ -86,8 +105,12 @@ export interface HistoryEntry {
 export interface LaserApi {
   library: {
     list(): Promise<LibraryEntry[]>;
-    save(name: string, design: unknown, thumbnail: string, id?: string): Promise<string>;
-    load(id: string): Promise<unknown>;
+    save(name: string, design: unknown, thumbnail: string, id?: string, extra?: { folder?: string; source?: DesignSource }): Promise<string>;
+    load(id: string): Promise<{ design?: unknown; source?: DesignSource }>;
+    /** Asks for a folder and lists the design files in it (and its subfolders). */
+    pickFolder(): Promise<{ root: string; files: FolderFile[] } | null>;
+    /** Reads one of the files found by pickFolder. */
+    readFile(path: string): Promise<{ text?: string; dataUrl?: string }>;
     remove(id: string): Promise<void>;
     rename(id: string, name: string): Promise<void>;
   };
