@@ -16,6 +16,11 @@ export class Machines extends EventEmitter {
     for (const d of [this.lp2, this.grbl]) d.on('event', (e) => this.emit('event', e));
   }
 
+  /** The USB driver is holding the port open: a normal exit could hang. */
+  get stuck() {
+    return this.lp2.stuck;
+  }
+
   get connected() {
     return this.current.connected;
   }

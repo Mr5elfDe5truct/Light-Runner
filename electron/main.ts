@@ -153,10 +153,18 @@ handle('laser:apply-settings', async (s: DeviceSettings) => {
 
 // While developing, keep a trace of everything said to a G-code laser.
 if (!app.isPackaged && !process.env.LR_GRBL_LOG) process.env.LR_GRBL_LOG = path.join(app.getPath('temp'), 'light-runner-grbl.log');
+// One copy at a time: only one program can hold the laser's port.
+if (!app.requestSingleInstanceLock()) app.exit(0);
+app.on('second-instance', () => {
+  if (win?.isMinimized()) win.restore();
+  win?.focus();
+});
 app.whenReady().then(createWindow);
 app.on('window-all-closed', async () => {
   await store?.flush().catch(() => undefined);
   if (laser.connected) await laser.stop().catch(() => undefined);
-  await laser.disconnect();
+  await laser.disconnect().catch(() => undefined);
+  // A stuck USB driver must not leave a hidden copy running with the port held.
+  if (laser.stuck) process.kill(process.pid, 'SIGKILL');
   app.quit();
 });

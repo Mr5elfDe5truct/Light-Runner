@@ -11,6 +11,14 @@ type SerialPortType = import('serialport').SerialPort;
 const POLL_MS = 1000;
 const CHUNK = 2048; // LDS sends files in 2 KB pieces about 100 ms apart
 const CHUNK_GAP_MS = 100;
+const PREVIEW_STOP_MS = 10_000; // it may not answer until it has finished the lap it's tracing
+const ANNOUNCE_MS = 30_000; // 0.3 s for small files in the captures; big ones weren't measured
+const SETTLE_MS = 1100; // LDS leaves this between the idle after an upload and the engrave command
+const WRITE_MS = 5000;
+const CLOSE_MS = 3000;
+const SILENT_POLLS = 3; // unanswered status checks in a row before saying so
+/** Only the answer to idle(): after an upload the LP2 also sends ff 01 + the size by itself. */
+const isIdleReply = (p: Uint8Array) => p[0] === 0xff && p[1] === 0x00;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Waiter {
@@ -20,7 +28,41 @@ interface Waiter {
   timer: NodeJS.Timeout;
 }
 
+export type PortOpener = (path: string) => Promise<SerialPortType>;
+
+const openSerial: PortOpener = async (path) => {
+  const { SerialPort } = await import('serialport');
+  const port = new SerialPort({ path, baudRate: lp2.BAUD, dataBits: 8, parity: 'none', stopBits: 1, autoOpen: false });
+  await new Promise<void>((resolve, reject) => port.open((e) => (e ? reject(new Error(`Couldn't open ${path}: ${e.message}. Is LaserPecker Design Space (or another Light Runner) using it?`)) : resolve())));
+  await new Promise<void>((resolve) => port.set({ dtr: true, rts: true }, () => resolve()));
+  return port;
+};
+
 export class Laser extends EventEmitter {
+  constructor(private opener: PortOpener = openSerial) {
+    super();
+  }
+
+  private silent = 0;
+  private polling = false;
+  /** The driver didn't close the port in time, so a normal exit could hang. */
+  stuck = false;
+
+  /** Closes a port, but never waits long on a stuck driver. */
+  private closePort(port: SerialPortType) {
+    return new Promise<void>((resolve) => {
+      if (!port.isOpen) return resolve();
+      const timer = setTimeout(() => {
+        this.stuck = true;
+        resolve();
+      }, CLOSE_MS);
+      port.close(() => {
+        clearTimeout(timer);
+        this.stuck = false;
+        resolve();
+      });
+    });
+  }
   private port: SerialPortType | null = null;
   private buffer: Uint8Array = new Uint8Array(0);
   private waiters: Waiter[] = [];
@@ -65,14 +107,14 @@ export class Laser extends EventEmitter {
   }
 
   private async open(path: string): Promise<DeviceInfo> {
-    const { SerialPort } = await import('serialport');
-    const port = new SerialPort({ path, baudRate: lp2.BAUD, dataBits: 8, parity: 'none', stopBits: 1, autoOpen: false });
-    await new Promise<void>((resolve, reject) => port.open((e) => (e ? reject(new Error(`Couldn't open ${path}: ${e.message}. Is LaserPecker Design Space using it?`)) : resolve())));
-    await new Promise<void>((resolve) => port.set({ dtr: true, rts: true }, () => resolve()));
+    const port = await this.opener(path);
     this.port = port;
+    this.lock = Promise.resolve();
+    this.silent = 0;
+    this.polling = false;
     this.buffer = new Uint8Array(0);
     port.on('data', (chunk: Buffer) => this.onData(chunk));
-    port.on('close', () => this.onClosed());
+    port.on('close', () => this.port === port && this.onClosed());
     port.on('error', (e) => this.log(`Serial error: ${e.message}`, 'error'));
     await sleep(200);
 
@@ -84,7 +126,7 @@ export class Laser extends EventEmitter {
     } catch (e) {
       const keep = this.wantConnected;
       this.wantConnected = false;
-      if (port.isOpen) await new Promise<void>((r) => port.close(() => r()));
+      await this.closePort(port);
       this.port = null;
       this.wantConnected = keep;
       throw new Error(`The device on ${path} didn't answer like an LP2. ${(e as Error).message}`);
@@ -130,8 +172,9 @@ export class Laser extends EventEmitter {
     this.stopReconnecting();
     this.stopPolling();
     const port = this.port;
-    if (port?.isOpen) await new Promise<void>((r) => port.close(() => r())); // 'close' tells the window
-    this.port = null;
+    if (port) await this.closePort(port); // 'close' tells the window
+    // The driver never confirmed the close: tell the window anyway, and ignore a late 'close'.
+    if (port && this.port === port) this.onClosed();
   }
 
   private wantConnected = false;
@@ -214,10 +257,18 @@ export class Laser extends EventEmitter {
   private write(data: Uint8Array): Promise<void> {
     const port = this.port;
     if (!port?.isOpen) return Promise.reject(new Error('Not connected.'));
-    return new Promise((resolve, reject) => port.write(Buffer.from(data), (e) => (e ? reject(e) : port.drain(() => resolve()))));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('The USB port stopped accepting data. Unplug the LP2 and plug it back in.')), WRITE_MS);
+      const done = (e?: Error | null) => {
+        clearTimeout(timer);
+        if (e) reject(e);
+        else resolve();
+      };
+      port.write(Buffer.from(data), (e) => (e ? done(e) : port.drain(done)));
+    });
   }
 
-  private waitFor(match: (p: Uint8Array) => boolean, timeoutMs: number): Promise<Uint8Array> {
+  private waitFor(match: (p: Uint8Array) => boolean, timeoutMs: number, what = 'command'): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
       const w: Waiter = {
         match,
@@ -225,7 +276,7 @@ export class Laser extends EventEmitter {
         reject,
         timer: setTimeout(() => {
           this.waiters = this.waiters.filter((x) => x !== w);
-          reject(new Error('The laser didn\'t answer in time.'));
+          reject(new Error(`The laser didn't answer in time (${what}).`));
         }, timeoutMs),
       };
       this.waiters.push(w);
@@ -233,9 +284,10 @@ export class Laser extends EventEmitter {
   }
 
   /** Sends a command and waits for the reply that matches, one exchange at a time. */
-  private ask(command: Uint8Array, match: (p: Uint8Array) => boolean, timeoutMs = 2000): Promise<Uint8Array> {
+  private ask(command: Uint8Array, match: (p: Uint8Array) => boolean, timeoutMs = 2000, what?: string): Promise<Uint8Array> {
     const go = async () => {
-      const reply = this.waitFor(match, timeoutMs);
+      const reply = this.waitFor(match, timeoutMs, what);
+      reply.catch(() => undefined); // if the write fails, that's the error to report
       await this.write(command);
       return reply;
     };
@@ -247,8 +299,20 @@ export class Laser extends EventEmitter {
   private startPolling() {
     this.stopPolling();
     this.poller = setInterval(() => {
-      if (!this.connected || this.phase === 'uploading') return;
-      this.status().catch(() => undefined);
+      // One at a time: unanswered checks must not queue up ahead of a Stop.
+      if (!this.connected || this.phase === 'uploading' || this.polling) return;
+      this.polling = true;
+      this.status()
+        .then(
+          () => {
+            if (this.silent >= SILENT_POLLS) this.log('The LP2 is answering again.');
+            this.silent = 0;
+          },
+          () => {
+            if (this.connected && ++this.silent === SILENT_POLLS) this.log('The LP2 has stopped answering. Switch it off and on, then Disconnect and Connect.', 'error');
+          },
+        )
+        .finally(() => (this.polling = false));
     }, POLL_MS);
   }
 
@@ -258,14 +322,23 @@ export class Laser extends EventEmitter {
   }
 
   async status(): Promise<lp2.Status | null> {
-    const reply = await this.ask(lp2.query(lp2.QUERY.status), (p) => p[0] === 0x00 && p.length >= 15 && p.length < 64);
+    const reply = await this.ask(lp2.query(lp2.QUERY.status), (p) => p[0] === 0x00 && p.length >= 15 && p.length < 64, 2000, 'status');
     const status = lp2.parseStatus(reply);
     if (status) this.emitEvent({ type: 'status', status });
     return status;
   }
 
-  private idle() {
-    return this.ask(lp2.idle(), (p) => p[0] === 0xff);
+  private idle(timeoutMs = 2000, what = 'idle') {
+    return this.ask(lp2.idle(), isIdleReply, timeoutMs, what);
+  }
+
+  /** Idle before a job: it may still be leaving a preview, so ask patiently, and twice. */
+  private async readyForJob() {
+    try {
+      await this.idle(4000, 'getting ready');
+    } catch {
+      await this.idle(PREVIEW_STOP_MS, 'getting ready');
+    }
   }
 
   /** Uploads and engraves each job in turn, as LDS does with several objects. */
@@ -288,23 +361,33 @@ export class Laser extends EventEmitter {
     const fileId = job.file.slice(5, 9);
     const where = { job: n, jobs: total, name: job.name };
     this.setPhase('uploading', { ...where, uploaded: 0, size: job.file.length });
-    await this.idle();
-    const ready = await this.ask(lp2.announceFile(job.file.length), (p) => p[0] === 0x05 && p[1] === 0x01);
+    await this.readyForJob();
+    if (this.stopRequested) return;
+    const ready = await this.ask(lp2.announceFile(job.file.length), (p) => p[0] === 0x05 && p[1] === 0x01, ANNOUNCE_MS, 'making room for the file');
     if (ready[2] !== 0x01) throw new Error('The laser refused the file.');
-    const received = this.waitFor((p) => p[0] === 0x05 && p[1] === 0x02, 15_000 + job.file.length / 5);
+    const received = this.waitFor((p) => p[0] === 0x05 && p[1] === 0x02, 15_000 + job.file.length / 5, 'receiving the file');
+    received.catch(() => undefined); // awaited below; a failed write is reported first
     for (let at = 0; at < job.file.length; at += CHUNK) {
       await this.write(job.file.slice(at, at + CHUNK));
       this.setPhase('uploading', { ...where, uploaded: Math.min(at + CHUNK, job.file.length), size: job.file.length });
       if (at + CHUNK < job.file.length) await sleep(CHUNK_GAP_MS);
     }
     await received;
-    await this.idle();
+    await this.idle(5000, 'after the upload');
+    await sleep(SETTLE_MS);
     if (this.stopRequested) return;
 
     await this.ask(
       lp2.engrave({ fileId, power: job.power, depth: job.depth, xMm: job.xMm, yMm: job.yMm, passes: job.passes, dithered: job.dithered }),
       (p) => p[0] === 0x01 && p[1] === 0x01,
+      5000,
+      'starting the job',
     );
+    if (this.stopRequested) {
+      // Stop was pressed while the start command was on its way.
+      await this.idle(PREVIEW_STOP_MS, 'stopping');
+      return;
+    }
     this.setPhase('engraving', where);
     this.log(`Engraving ${job.name}: power ${job.power} %, depth ${job.depth}, ${job.passes} pass${job.passes === 1 ? '' : 'es'}.`);
 
@@ -337,8 +420,18 @@ export class Laser extends EventEmitter {
   /** Stops a job or a preview straight away. */
   async stop() {
     this.stopRequested = true;
-    if (this.phase !== 'idle') this.setPhase('stopping');
-    await this.idle();
+    const was = this.phase;
+    if (was === 'uploading') {
+      // Anything sent now would be taken as part of the file. runOne() stops it once it's across.
+      this.log('Stopping once the upload is across.');
+      return;
+    }
+    if (was !== 'idle') this.setPhase('stopping');
+    try {
+      await this.idle(PREVIEW_STOP_MS, 'stopping');
+    } finally {
+      if (was === 'previewing') this.setPhase('idle');
+    }
     this.log('Stopped.');
   }
 
@@ -350,7 +443,7 @@ export class Laser extends EventEmitter {
   }
 
   async stopPreview() {
-    await this.idle();
+    await this.idle(PREVIEW_STOP_MS, 'stopping the preview');
     this.setPhase('idle');
   }
 

@@ -1135,11 +1135,14 @@ export function App() {
           previewing={run.phase === 'previewing'}
           onTraceField={() => laser.preview({ x: 0, y: 0, width: FIELD.w * 10, height: FIELD.h * 10, brightness })}
           onStopTrace={() => laser.stopPreview()}
-          onCancel={() => setDialog(null)}
+          onCancel={() => {
+            setDialog(null);
+            if (run.phase === 'previewing') act(() => laser.stopPreview());
+          }}
           onDone={(url) => {
             setCameraBg({ url, opacity: 0.6, show: true });
             setDialog(null);
-            if (run.phase === 'previewing') laser.stopPreview().catch(() => undefined);
+            if (run.phase === 'previewing') act(() => laser.stopPreview()); // busy until the light has stopped
             note('The photo is under your design. Line the design up with the object, then Preview to check.');
           }}
         />

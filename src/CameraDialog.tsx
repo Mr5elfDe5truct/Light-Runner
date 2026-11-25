@@ -63,14 +63,19 @@ export function CameraDialog({ connected, previewing, onTraceField, onStopTrace,
     stream.current?.getTracks().forEach((t) => t.stop());
     stream.current = null;
     if (!source || source === 'file' || photo) return;
+    let gone = false;
     navigator.mediaDevices
       .getUserMedia({ video: { deviceId: { exact: source }, width: { ideal: 1920 }, height: { ideal: 1080 } } })
       .then((s) => {
+        if (gone) return s.getTracks().forEach((t) => t.stop()); // closed while the camera was starting
         stream.current = s;
         if (video.current) video.current.srcObject = s;
         setError(null);
       })
       .catch((e) => setError(`Couldn't open the camera: ${(e as Error).message}`));
+    return () => {
+      gone = true;
+    };
   }, [source, photo]);
 
   const useImage = (canvas: HTMLCanvasElement) => {
@@ -137,7 +142,7 @@ export function CameraDialog({ connected, previewing, onTraceField, onStopTrace,
         <li>
           Have the LP2 trace the whole field with its light, so the field's edges show in the picture.{' '}
           {previewing ? (
-            <button className="small" onClick={() => onStopTrace()}>
+            <button className="small" onClick={() => onStopTrace().catch((e) => setError((e as Error).message))}>
               Stop the light
             </button>
           ) : (
